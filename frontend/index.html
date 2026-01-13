@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataToVisual</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>DataToVisual</h1>
+        <p class="subtitle">Ask business questions in plain English</p>
+
+        <div class="query-box">
+            <input
+                type="text"
+                id="question"
+                placeholder="e.g., Compare total sales in 2026 vs 2022"
+            >
+            <button id="submit" onclick="submitQuery()">Ask</button>
+        </div>
+
+        <div class="examples">
+            <span>Try:</span>
+            <button onclick="setQuestion('Compare total sales in 2026 vs 2022')">Sales comparison</button>
+            <button onclick="setQuestion('How are our sales trending over the last 5 years?')">Sales trend</button>
+            <button onclick="setQuestion('What are our top 5 selling products?')">Top products</button>
+            <button onclick="setQuestion('Show sales by product category')">By category</button>
+        </div>
+
+        <div id="loading" class="loading hidden">Loading...</div>
+
+        <div id="result" class="result hidden">
+            <div class="sql-box">
+                <strong>Generated SQL:</strong>
+                <pre id="sql-output"></pre>
+            </div>
+            <div class="chart-container">
+                <canvas id="chart"></canvas>
+            </div>
+        </div>
+
+        <div id="error" class="error hidden"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
