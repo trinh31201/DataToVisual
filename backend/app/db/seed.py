@@ -1,26 +1,30 @@
 import asyncio
 import random
 from datetime import date, timedelta
-from app.db.database import db, SCHEMA_SQL
+from decimal import Decimal
+from sqlalchemy import select
+from app.db.database import engine, async_session, Base
+from app.models import Product, Feature, Sale
+
 
 # Sample products
-PRODUCTS = [
-    ("iPhone 15", "Electronics", 999.99),
-    ("MacBook Pro", "Electronics", 1999.99),
-    ("AirPods Pro", "Electronics", 249.99),
-    ("Samsung TV", "Electronics", 799.99),
-    ("Winter Jacket", "Clothing", 149.99),
-    ("Running Shoes", "Clothing", 89.99),
-    ("Denim Jeans", "Clothing", 59.99),
-    ("Organic Coffee", "Food", 14.99),
-    ("Protein Bars", "Food", 24.99),
-    ("Olive Oil", "Food", 19.99),
-    ("Standing Desk", "Home", 399.99),
-    ("Office Chair", "Home", 299.99),
+PRODUCTS_DATA = [
+    ("iPhone 15", "Electronics", Decimal("999.99")),
+    ("MacBook Pro", "Electronics", Decimal("1999.99")),
+    ("AirPods Pro", "Electronics", Decimal("249.99")),
+    ("Samsung TV", "Electronics", Decimal("799.99")),
+    ("Winter Jacket", "Clothing", Decimal("149.99")),
+    ("Running Shoes", "Clothing", Decimal("89.99")),
+    ("Denim Jeans", "Clothing", Decimal("59.99")),
+    ("Organic Coffee", "Food", Decimal("14.99")),
+    ("Protein Bars", "Food", Decimal("24.99")),
+    ("Olive Oil", "Food", Decimal("19.99")),
+    ("Standing Desk", "Home", Decimal("399.99")),
+    ("Office Chair", "Home", Decimal("299.99")),
 ]
 
 # Features for products
-FEATURES = {
+FEATURES_DATA = {
     "iPhone 15": [("5G Connectivity", "Ultra-fast mobile internet"), ("A17 Chip", "Latest processor")],
     "MacBook Pro": [("M3 Chip", "Apple Silicon"), ("16GB RAM", "High performance memory")],
     "AirPods Pro": [("Noise Cancellation", "Active noise reduction"), ("Spatial Audio", "3D sound")],
@@ -30,69 +34,73 @@ FEATURES = {
 
 
 async def seed_database():
-    await db.connect()
-
     # Create tables
-    await db.execute(SCHEMA_SQL)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-    # Check if data exists
-    existing = await db.execute_query("SELECT COUNT(*) as count FROM products")
-    if existing[0]["count"] > 0:
-        print("Database already seeded")
-        await db.disconnect()
-        return
+    async with async_session() as session:
+        # Check if data exists
+        result = await session.execute(select(Product).limit(1))
+        if result.scalar():
+            print("Database already seeded")
+            return
 
-    # Insert products
-    for name, category, price in PRODUCTS:
-        await db.execute(f"""
-            INSERT INTO products (name, category, price)
-            VALUES ('{name}', '{category}', {price})
-        """)
+        # Create products
+        products = []
+        for name, category, price in PRODUCTS_DATA:
+            product = Product(name=name, category=category, price=price)
+            products.append(product)
+            session.add(product)
 
-    # Get product IDs
-    products = await db.execute_query("SELECT id, name FROM products")
-    product_map = {p["name"]: p["id"] for p in products}
+        await session.flush()  # Get IDs
 
-    # Insert features
-    for product_name, features in FEATURES.items():
-        if product_name in product_map:
-            for feat_name, feat_desc in features:
-                await db.execute(f"""
-                    INSERT INTO features (product_id, name, description)
-                    VALUES ({product_map[product_name]}, '{feat_name}', '{feat_desc}')
-                """)
+        # Create product map for features and sales
+        product_map = {p.name: p for p in products}
 
-    # Generate sales data (2022-2026)
-    start_date = date(2022, 1, 1)
-    end_date = date(2026, 12, 31)
-    current = start_date
+        # Create features
+        for product_name, features in FEATURES_DATA.items():
+            if product_name in product_map:
+                for feat_name, feat_desc in features:
+                    feature = Feature(
+                        product_id=product_map[product_name].id,
+                        name=feat_name,
+                        description=feat_desc
+                    )
+                    session.add(feature)
 
-    while current <= end_date:
-        # Random sales for random products each day
-        num_sales = random.randint(3, 10)
-        for _ in range(num_sales):
-            product = random.choice(PRODUCTS)
-            product_id = product_map[product[0]]
-            price = product[2]
-            quantity = random.randint(1, 5)
+        # Generate sales data (2022-2026)
+        start_date = date(2022, 1, 1)
+        end_date = date(2026, 12, 31)
+        current = start_date
 
-            # Add yearly growth trend
-            year_factor = 1 + (current.year - 2022) * 0.15
-            # Add seasonality (higher in Q4)
-            if current.month >= 10:
-                year_factor *= 1.3
+        while current <= end_date:
+            num_sales = random.randint(3, 10)
+            for _ in range(num_sales):
+                product_data = random.choice(PRODUCTS_DATA)
+                product = product_map[product_data[0]]
+                price = float(product_data[2])
+                quantity = random.randint(1, 5)
 
-            total = round(price * quantity * year_factor * random.uniform(0.9, 1.1), 2)
+                # Add yearly growth trend
+                year_factor = 1 + (current.year - 2022) * 0.15
+                # Add seasonality (higher in Q4)
+                if current.month >= 10:
+                    year_factor *= 1.3
 
-            await db.execute(f"""
-                INSERT INTO sales (product_id, quantity, total_amount, sale_date)
-                VALUES ({product_id}, {quantity}, {total}, '{current}')
-            """)
+                total = Decimal(str(round(price * quantity * year_factor * random.uniform(0.9, 1.1), 2)))
 
-        current += timedelta(days=1)
+                sale = Sale(
+                    product_id=product.id,
+                    quantity=quantity,
+                    total_amount=total,
+                    sale_date=current
+                )
+                session.add(sale)
 
-    print("Database seeded successfully!")
-    await db.disconnect()
+            current += timedelta(days=1)
+
+        await session.commit()
+        print("Database seeded successfully!")
 
 
 if __name__ == "__main__":

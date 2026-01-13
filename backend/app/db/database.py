@@ -1,8 +1,31 @@
 import asyncpg
 from typing import Any
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import DeclarativeBase
 from app.config import Config
 
 
+# SQLAlchemy Base for ORM models
+class Base(DeclarativeBase):
+    pass
+
+
+# Async engine for SQLAlchemy
+engine = create_async_engine(
+    Config.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
+    echo=False
+)
+
+# Session factory
+async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+async def get_session() -> AsyncSession:
+    async with async_session() as session:
+        yield session
+
+
+# Raw SQL Database class (for LLM-generated queries)
 class Database:
     def __init__(self):
         self.pool: asyncpg.Pool | None = None
@@ -31,36 +54,6 @@ class Database:
 
 
 db = Database()
-
-
-SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS products (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    category VARCHAR(100) NOT NULL,
-    price DECIMAL(10,2) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS features (
-    id SERIAL PRIMARY KEY,
-    product_id INT REFERENCES products(id) ON DELETE CASCADE,
-    name VARCHAR(255) NOT NULL,
-    description TEXT
-);
-
-CREATE TABLE IF NOT EXISTS sales (
-    id SERIAL PRIMARY KEY,
-    product_id INT REFERENCES products(id) ON DELETE CASCADE,
-    quantity INT NOT NULL,
-    total_amount DECIMAL(12,2) NOT NULL,
-    sale_date DATE NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date);
-CREATE INDEX IF NOT EXISTS idx_sales_product ON sales(product_id);
-CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
-"""
 
 
 SCHEMA_DESCRIPTION = """
