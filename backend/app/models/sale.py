@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Numeric, Date, ForeignKey
+from sqlalchemy import Column, Integer, Numeric, Date, ForeignKey, DateTime, func
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -11,6 +11,8 @@ class Sale(Base):
     quantity = Column(Integer, nullable=False)
     total_amount = Column(Numeric(12, 2), nullable=False)
     sale_date = Column(Date, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     # Relationships
     product = relationship("Product", back_populates="sales")
