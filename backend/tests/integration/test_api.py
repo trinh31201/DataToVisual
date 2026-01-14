@@ -40,7 +40,8 @@ class TestAPIIntegration:
                 assert response.status_code == 200
                 data = response.json()
                 assert data["chart_type"] == "bar"
-                assert len(data["data"]["labels"]) > 0
+                assert len(data["rows"]) > 0
+                assert "category" in data["columns"]
 
     @pytest.mark.asyncio
     async def test_query_sales_trend(self):
@@ -71,9 +72,9 @@ class TestAPIIntegration:
                 data = response.json()
                 assert data["chart_type"] == "line"
                 # Should have 5 years of data
-                assert len(data["data"]["labels"]) == 5
-                # Should have dataset with totals
-                assert len(data["data"]["datasets"]) == 1
+                assert len(data["rows"]) == 5
+                assert "year" in data["columns"]
+                assert "total" in data["columns"]
 
     @pytest.mark.asyncio
     async def test_query_top_products(self):
@@ -104,7 +105,7 @@ class TestAPIIntegration:
 
                 assert response.status_code == 200
                 data = response.json()
-                assert len(data["data"]["labels"]) == 5
+                assert len(data["rows"]) == 5
 
     @pytest.mark.asyncio
     async def test_query_invalid_sql(self):
@@ -129,8 +130,8 @@ class TestAPIIntegration:
                 assert response.status_code == 500
 
     @pytest.mark.asyncio
-    async def test_chart_data_format(self):
-        """Test that chart data is properly formatted for Chart.js."""
+    async def test_response_format(self):
+        """Test that response has correct format with columns and rows."""
         mock_llm_result = {
             "sql": """
                 SELECT p.category, SUM(s.total_amount) as total_sales
@@ -155,15 +156,14 @@ class TestAPIIntegration:
 
                 data = response.json()
 
-                # Verify Chart.js format
-                chart_data = data["data"]
-                assert "labels" in chart_data
-                assert "datasets" in chart_data
-                assert isinstance(chart_data["labels"], list)
-                assert isinstance(chart_data["datasets"], list)
+                # Verify raw data format
+                assert "columns" in data
+                assert "rows" in data
+                assert isinstance(data["columns"], list)
+                assert isinstance(data["rows"], list)
 
-                # Each dataset should have label and data
-                for dataset in chart_data["datasets"]:
-                    assert "label" in dataset
-                    assert "data" in dataset
-                    assert isinstance(dataset["data"], list)
+                # Each row should be a dict with column keys
+                for row in data["rows"]:
+                    assert isinstance(row, dict)
+                    for col in data["columns"]:
+                        assert col in row

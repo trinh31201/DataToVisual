@@ -37,9 +37,35 @@ async function submitQuery() {
     }
 }
 
+/**
+ * Convert raw data from API to Chart.js format
+ * @param {string[]} columns - Column names
+ * @param {Object[]} rows - Array of row objects
+ * @returns {Object} Chart.js data format {labels, datasets}
+ */
+function toChartData(columns, rows) {
+    if (!rows || rows.length === 0) {
+        return { labels: [], datasets: [] };
+    }
+
+    // First column is labels, rest are datasets
+    const labelColumn = columns[0];
+    const dataColumns = columns.slice(1);
+
+    const labels = rows.map(row => String(row[labelColumn]));
+
+    const datasets = dataColumns.map(col => ({
+        label: col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        data: rows.map(row => Number(row[col]) || 0)
+    }));
+
+    return { labels, datasets };
+}
+
 function showResult(data) {
     document.getElementById('result').classList.remove('hidden');
-    renderChart(data.chart_type, data.data);
+    const chartData = toChartData(data.columns, data.rows);
+    renderChart(data.chart_type, chartData);
 }
 
 function showError(message) {

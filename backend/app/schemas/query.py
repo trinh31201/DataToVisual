@@ -6,12 +6,8 @@ class QueryRequest(BaseModel):
     question: str
 
 
-class ChartData(BaseModel):
-    labels: list[str]
-    datasets: list[dict[str, Any]]
-
-
 class QueryResponse(BaseModel):
     question: str
     chart_type: str
-    data: ChartData
+    columns: list[str]
+    rows: list[dict[str, Any]]

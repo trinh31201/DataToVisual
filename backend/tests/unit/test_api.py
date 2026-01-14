@@ -33,7 +33,8 @@ class TestQueryEndpoint:
             data = response.json()
             assert data["question"] == "Show sales by category"
             assert data["chart_type"] == "bar"
-            assert data["data"]["labels"] == ["Electronics", "Clothing"]
+            assert data["columns"] == ["category", "total"]
+            assert data["rows"] == mock_db_result
 
     @pytest.mark.asyncio
     async def test_query_llm_failure(self, client):
@@ -122,8 +123,8 @@ class TestQueryEndpoint:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["data"]["labels"] == []
-            assert data["data"]["datasets"] == []
+            assert data["columns"] == []
+            assert data["rows"] == []
 
     @pytest.mark.asyncio
     async def test_query_missing_question(self, client):
