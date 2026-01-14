@@ -2,6 +2,7 @@ import json
 import google.generativeai as genai
 from app.config import Config
 from app.db.database import SCHEMA_DESCRIPTION
+from app.errors import ErrorType
 
 
 class LLMService:
@@ -14,7 +15,11 @@ class LLMService:
 
     def generate_sql(self, question: str) -> dict:
         if not self.model:
-            return {"success": False, "error": "Gemini API key not configured"}
+            return {
+                "success": False,
+                "error": "Gemini API key not configured",
+                "error_type": ErrorType.NOT_CONFIGURED
+            }
 
         prompt = f"""You are a SQL expert. Given a natural language question, generate a PostgreSQL query.
 
@@ -53,12 +58,20 @@ JSON Response:"""
             result = json.loads(text)
 
             if "sql" not in result or "chart_type" not in result:
-                return {"success": False, "error": "Invalid LLM response format"}
+                return {
+                    "success": False,
+                    "error": "Invalid LLM response format",
+                    "error_type": ErrorType.INVALID_RESPONSE
+                }
 
             # Basic SQL safety check
             sql_upper = result["sql"].upper()
             if any(keyword in sql_upper for keyword in ["INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "ALTER"]):
-                return {"success": False, "error": "Only SELECT queries allowed"}
+                return {
+                    "success": False,
+                    "error": "Only SELECT queries allowed",
+                    "error_type": ErrorType.DANGEROUS_SQL
+                }
 
             return {
                 "success": True,
@@ -67,9 +80,25 @@ JSON Response:"""
             }
 
         except json.JSONDecodeError:
-            return {"success": False, "error": "Failed to parse LLM response"}
+            return {
+                "success": False,
+                "error": "Failed to parse LLM response",
+                "error_type": ErrorType.INVALID_RESPONSE
+            }
         except Exception as e:
-            return {"success": False, "error": str(e)}
+            error_str = str(e)
+            # Detect rate limit errors
+            if "429" in error_str or "quota" in error_str.lower():
+                return {
+                    "success": False,
+                    "error": "Rate limit exceeded",
+                    "error_type": ErrorType.RATE_LIMIT
+                }
+            return {
+                "success": False,
+                "error": error_str,
+                "error_type": ErrorType.API_ERROR
+            }
 
 
 llm_service = LLMService()

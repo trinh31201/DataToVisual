@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import patch, AsyncMock
+from app.errors import ErrorType
 
 
 class TestHealthEndpoint:
@@ -42,11 +43,12 @@ class TestQueryEndpoint:
 
     @pytest.mark.asyncio
     async def test_query_llm_failure(self, client):
-        """Test query when LLM fails."""
+        """Test query when LLM fails returns 400."""
         with patch("app.routers.query.llm_service") as mock_llm:
             mock_llm.generate_sql.return_value = {
                 "success": False,
-                "error": "API rate limit exceeded"
+                "error": "Invalid response",
+                "error_type": ErrorType.INVALID_RESPONSE
             }
 
             response = await client.post(
@@ -54,14 +56,28 @@ class TestQueryEndpoint:
                 json={"question": "Show me sales"}
             )
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is False
-            assert "API rate limit exceeded" in data["error"]
+            assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_query_rate_limit(self, client):
+        """Test query when rate limited returns 429."""
+        with patch("app.routers.query.llm_service") as mock_llm:
+            mock_llm.generate_sql.return_value = {
+                "success": False,
+                "error": "Rate limit exceeded",
+                "error_type": ErrorType.RATE_LIMIT
+            }
+
+            response = await client.post(
+                "/api/v1/query",
+                json={"question": "Show me sales"}
+            )
+
+            assert response.status_code == 429
 
     @pytest.mark.asyncio
     async def test_query_db_error(self, client, mock_llm_response):
-        """Test query when database fails."""
+        """Test query when database fails returns 500."""
         with patch("app.routers.query.llm_service") as mock_llm, \
              patch("app.routers.query.db") as mock_db:
             mock_llm.generate_sql.return_value = mock_llm_response
@@ -74,10 +90,7 @@ class TestQueryEndpoint:
                 json={"question": "Show sales"}
             )
 
-            assert response.status_code == 200
-            data = response.json()
-            assert data["success"] is False
-            assert "Database connection failed" in data["error"]
+            assert response.status_code == 500
 
     @pytest.mark.asyncio
     async def test_query_empty_result(self, client, mock_llm_response):

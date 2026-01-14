@@ -125,7 +125,7 @@ class TestAPIIntegration:
 
     @pytest.mark.asyncio
     async def test_query_invalid_sql(self):
-        """Test that invalid SQL returns error gracefully."""
+        """Test that invalid SQL returns 500 error."""
         mock_llm_result = {
             "success": True,
             "sql": "SELECT * FROM nonexistent_table",
@@ -144,10 +144,7 @@ class TestAPIIntegration:
                     json={"question": "Show nonexistent data"}
                 )
 
-                assert response.status_code == 200
-                data = response.json()
-                assert data["success"] is False
-                assert data["error"] is not None
+                assert response.status_code == 500
 
     @pytest.mark.asyncio
     async def test_chart_data_format(self):

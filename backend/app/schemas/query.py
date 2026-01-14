@@ -14,6 +14,5 @@ class ChartData(BaseModel):
 class QueryResponse(BaseModel):
     success: bool
     question: str
-    chart_type: str | None = None
-    data: ChartData | None = None
-    error: str | None = None
+    chart_type: str
+    data: ChartData

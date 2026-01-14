@@ -21,15 +21,16 @@ async function submitQuery() {
             body: JSON.stringify({ question })
         });
 
-        const data = await response.json();
-
         document.getElementById('loading').classList.add('hidden');
 
-        if (data.success) {
-            showResult(data);
-        } else {
-            showError(data.error || 'Something went wrong');
+        if (!response.ok) {
+            const error = await response.json();
+            showError(error.detail || `Error: ${response.status}`);
+            return;
         }
+
+        const data = await response.json();
+        showResult(data);
     } catch (err) {
         document.getElementById('loading').classList.add('hidden');
         showError('Failed to connect to API. Make sure the backend is running.');
@@ -37,9 +38,7 @@ async function submitQuery() {
 }
 
 function showResult(data) {
-    document.getElementById('sql-output').textContent = data.sql;
     document.getElementById('result').classList.remove('hidden');
-
     renderChart(data.chart_type, data.data);
 }
 

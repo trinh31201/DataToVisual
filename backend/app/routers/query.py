@@ -1,12 +1,22 @@
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from app.schemas.query import QueryRequest, QueryResponse, ChartData
 from app.services.llm_service import llm_service
 from app.db.database import db
+from app.errors import ErrorType
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
+
+# Map error types to HTTP status codes
+ERROR_STATUS_MAP = {
+    ErrorType.RATE_LIMIT: 429,
+    ErrorType.NOT_CONFIGURED: 503,
+    ErrorType.INVALID_RESPONSE: 400,
+    ErrorType.DANGEROUS_SQL: 400,
+    ErrorType.API_ERROR: 503,
+}
 
 
 @router.get("/health")
@@ -16,43 +26,37 @@ async def health():
 
 @router.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
+    # 1. Generate SQL from question
+    result = llm_service.generate_sql(request.question)
+
+    if not result["success"]:
+        error_type = result.get("error_type", ErrorType.API_ERROR)
+        status_code = ERROR_STATUS_MAP.get(error_type, 500)
+        raise HTTPException(status_code=status_code, detail=result.get("error", "Unknown error"))
+
+    sql = result["sql"]
+    chart_type = result["chart_type"]
+
+    # Log SQL for debugging
+    logger.info(f"Question: {request.question}")
+    logger.info(f"Generated SQL: {sql}")
+
+    # 2. Execute SQL
     try:
-        # 1. Generate SQL from question
-        result = llm_service.generate_sql(request.question)
-
-        if not result["success"]:
-            return QueryResponse(
-                success=False,
-                question=request.question,
-                error=result.get("error", "Failed to generate SQL")
-            )
-
-        sql = result["sql"]
-        chart_type = result["chart_type"]
-
-        # Log SQL for debugging
-        logger.info(f"Question: {request.question}")
-        logger.info(f"Generated SQL: {sql}")
-
-        # 2. Execute SQL
         rows = await db.execute_query(sql)
-
-        # 3. Format for Chart.js
-        chart_data = format_chart_data(rows)
-
-        return QueryResponse(
-            success=True,
-            question=request.question,
-            chart_type=chart_type,
-            data=chart_data
-        )
-
     except Exception as e:
-        return QueryResponse(
-            success=False,
-            question=request.question,
-            error=str(e)
-        )
+        logger.error(f"Database error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to execute query")
+
+    # 3. Format for Chart.js
+    chart_data = format_chart_data(rows)
+
+    return QueryResponse(
+        success=True,
+        question=request.question,
+        chart_type=chart_type,
+        data=chart_data
+    )
 
 
 def format_chart_data(rows: list[dict]) -> ChartData:
