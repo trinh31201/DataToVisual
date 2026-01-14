@@ -1,7 +1,10 @@
+import logging
 from fastapi import APIRouter
 from app.schemas.query import QueryRequest, QueryResponse, ChartData
 from app.services.llm_service import llm_service
 from app.db.database import db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["v1"])
 
@@ -27,6 +30,10 @@ async def query(request: QueryRequest):
         sql = result["sql"]
         chart_type = result["chart_type"]
 
+        # Log SQL for debugging
+        logger.info(f"Question: {request.question}")
+        logger.info(f"Generated SQL: {sql}")
+
         # 2. Execute SQL
         rows = await db.execute_query(sql)
 
@@ -36,7 +43,6 @@ async def query(request: QueryRequest):
         return QueryResponse(
             success=True,
             question=request.question,
-            sql=sql,
             chart_type=chart_type,
             data=chart_data
         )

@@ -37,7 +37,6 @@ class TestQueryEndpoint:
             data = response.json()
             assert data["success"] is True
             assert data["question"] == "Show sales by category"
-            assert data["sql"] == mock_llm_response["sql"]
             assert data["chart_type"] == "bar"
             assert data["data"]["labels"] == ["Electronics", "Clothing"]
 
