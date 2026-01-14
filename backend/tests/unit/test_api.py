@@ -22,7 +22,7 @@ class TestQueryEndpoint:
             ]
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm, \
+        with patch("app.routers.query.ai_service") as mock_llm, \
              patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
             mock_llm.get_function_call.return_value = mock_function_call
             mock_tool.return_value = mock_tool_result
@@ -42,7 +42,7 @@ class TestQueryEndpoint:
     @pytest.mark.asyncio
     async def test_query_llm_failure(self, client):
         """Test query when LLM fails returns 400."""
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.side_effect = AppException(
                 ErrorType.INVALID_RESPONSE, "Invalid response"
             )
@@ -57,7 +57,7 @@ class TestQueryEndpoint:
     @pytest.mark.asyncio
     async def test_query_rate_limit(self, client):
         """Test query when rate limited returns 429."""
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.side_effect = AppException(
                 ErrorType.RATE_LIMIT, "Rate limit exceeded"
             )
@@ -72,7 +72,7 @@ class TestQueryEndpoint:
     @pytest.mark.asyncio
     async def test_query_not_configured(self, client):
         """Test query when LLM not configured returns 503."""
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.side_effect = AppException(
                 ErrorType.NOT_CONFIGURED, "Gemini API key not configured"
             )
@@ -92,7 +92,7 @@ class TestQueryEndpoint:
             "args": {"group_by": "category", "chart_type": "bar"}
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm, \
+        with patch("app.routers.query.ai_service") as mock_llm, \
              patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
             mock_llm.get_function_call.return_value = mock_function_call
             mock_tool.side_effect = Exception("Database connection failed")
@@ -116,7 +116,7 @@ class TestQueryEndpoint:
             "rows": []
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm, \
+        with patch("app.routers.query.ai_service") as mock_llm, \
              patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
             mock_llm.get_function_call.return_value = mock_function_call
             mock_tool.return_value = mock_tool_result
@@ -151,7 +151,7 @@ class TestQueryEndpoint:
             ]
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm, \
+        with patch("app.routers.query.ai_service") as mock_llm, \
              patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
             mock_llm.get_function_call.return_value = mock_function_call
             mock_tool.return_value = mock_tool_result

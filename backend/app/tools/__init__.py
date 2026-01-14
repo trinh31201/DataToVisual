@@ -1,1 +1,1 @@
-from app.tools.database_tools import TOOL_DEFINITIONS, execute_tool
+# Tools are now defined in app/mcp/server.py

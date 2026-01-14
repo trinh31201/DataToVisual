@@ -25,7 +25,7 @@ class TestAPIIntegration:
             "args": {"select": "by_category", "chart_type": "bar"}
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.return_value = mock_function_call
 
             async with AsyncClient(
@@ -52,7 +52,7 @@ class TestAPIIntegration:
             "args": {"group_by": "year", "chart_type": "line", "order": "ASC"}
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.return_value = mock_function_call
 
             async with AsyncClient(
@@ -80,7 +80,7 @@ class TestAPIIntegration:
             "args": {"select": "top_selling", "limit": 5, "chart_type": "bar"}
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.return_value = mock_function_call
 
             async with AsyncClient(
@@ -104,7 +104,7 @@ class TestAPIIntegration:
             "args": {}
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.return_value = mock_function_call
 
             async with AsyncClient(
@@ -126,7 +126,7 @@ class TestAPIIntegration:
             "args": {"group_by": "category", "chart_type": "pie"}
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.return_value = mock_function_call
 
             async with AsyncClient(
@@ -162,7 +162,7 @@ class TestAPIIntegration:
             }
         }
 
-        with patch("app.routers.query.llm_service") as mock_llm:
+        with patch("app.routers.query.ai_service") as mock_llm:
             mock_llm.get_function_call.return_value = mock_function_call
 
             async with AsyncClient(
