@@ -1,89 +1,73 @@
-import json
 import google.generativeai as genai
 from app.config import Config
-from app.db.database import SCHEMA_DESCRIPTION
 from app.errors import ErrorType
 from app.exceptions import AppException
+from app.tools.database_tools import TOOL_DEFINITIONS
 
 
 class LLMService:
     def __init__(self):
         if Config.GEMINI_API_KEY:
             genai.configure(api_key=Config.GEMINI_API_KEY)
-            self.model = genai.GenerativeModel(Config.GEMINI_MODEL)
+            self.model = genai.GenerativeModel(
+                Config.GEMINI_MODEL,
+                tools=[TOOL_DEFINITIONS]  # Register tools with Gemini
+            )
         else:
             self.model = None
 
-    def generate_sql(self, question: str) -> dict:
-        """Generate SQL from natural language question.
+    def get_function_call(self, question: str) -> dict:
+        """Get function call from Gemini (structured, not raw SQL).
 
         Returns:
-            dict with 'sql' and 'chart_type' keys
+            dict with 'name' and 'args' keys
 
         Raises:
-            AppException: On any error (not configured, rate limit, invalid response, etc.)
+            AppException: On any error
         """
         if not self.model:
             raise AppException(ErrorType.NOT_CONFIGURED, "Gemini API key not configured")
 
-        prompt = f"""You are a SQL expert. Given a natural language question, generate a {Config.DATABASE_TYPE} query.
+        prompt = f"""You are a data analyst. Based on the user's question,
+call the appropriate function to query the database.
 
-{SCHEMA_DESCRIPTION}
+Available data:
+- Sales data (can group by category, year, month, product)
+- Product data (can get all, by category, or top selling)
 
-RULES:
-1. Only generate SELECT queries (no INSERT, UPDATE, DELETE, DROP)
-2. Use proper {Config.DATABASE_TYPE} syntax
-3. Return results that can be visualized in a chart
-4. Choose appropriate chart type based on the question:
-   - Time trends/changes over time → "line"
-   - Comparisons between categories → "bar"
-   - Proportions/percentages → "pie"
-5. Order results logically (by date for trends, by value for rankings)
+User question: {question}
 
-Respond ONLY with valid JSON in this exact format:
-{{"sql": "SELECT ...", "chart_type": "line|bar|pie"}}
-
-Question: {question}
-
-JSON Response:"""
+Call the appropriate function with the right parameters."""
 
         try:
             response = self.model.generate_content(prompt)
-            text = response.text.strip()
 
-            # Clean up response if wrapped in markdown
-            if text.startswith("```json"):
-                text = text[7:]
-            if text.startswith("```"):
-                text = text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+            # Check if Gemini returned a function call
+            if not response.candidates:
+                raise AppException(ErrorType.INVALID_RESPONSE, "No response from LLM")
 
-            result = json.loads(text)
+            candidate = response.candidates[0]
 
-            if "sql" not in result or "chart_type" not in result:
-                raise AppException(ErrorType.INVALID_RESPONSE, "Invalid LLM response format")
+            # Check for function call in the response
+            if hasattr(candidate, 'content') and candidate.content.parts:
+                for part in candidate.content.parts:
+                    if hasattr(part, 'function_call') and part.function_call:
+                        fc = part.function_call
+                        return {
+                            "name": fc.name,
+                            "args": dict(fc.args)
+                        }
 
-            # Basic SQL safety check
-            sql_upper = result["sql"].upper()
-            dangerous_keywords = ["INSERT", "UPDATE", "DELETE", "DROP", "TRUNCATE", "ALTER"]
-            if any(keyword in sql_upper for keyword in dangerous_keywords):
-                raise AppException(ErrorType.DANGEROUS_SQL, "Only SELECT queries allowed")
-
-            return {
-                "sql": result["sql"],
-                "chart_type": result["chart_type"]
-            }
+            # No function call found - Gemini returned text instead
+            raise AppException(
+                ErrorType.INVALID_RESPONSE,
+                "LLM did not return a function call. Try rephrasing your question."
+            )
 
         except AppException:
-            # Re-raise our own exceptions
             raise
-        except json.JSONDecodeError:
-            raise AppException(ErrorType.INVALID_RESPONSE, "Failed to parse LLM response")
         except Exception as e:
             error_str = str(e)
-            # Detect rate limit errors
             if "429" in error_str or "quota" in error_str.lower():
                 raise AppException(ErrorType.RATE_LIMIT, "Rate limit exceeded")
             raise AppException(ErrorType.API_ERROR, error_str)

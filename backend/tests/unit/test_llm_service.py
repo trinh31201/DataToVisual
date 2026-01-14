@@ -6,7 +6,7 @@ from app.errors import ErrorType
 
 
 class TestLLMService:
-    """Tests for LLM service."""
+    """Tests for LLM service with function calling."""
 
     def test_no_api_key(self):
         """Test that service raises exception when no API key is configured."""
@@ -15,15 +15,29 @@ class TestLLMService:
             service = LLMService()
 
             with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Show me sales")
+                service.get_function_call("Show me sales")
 
             assert exc_info.value.error_type == ErrorType.NOT_CONFIGURED
             assert "not configured" in exc_info.value.message
 
-    def test_generate_sql_success(self):
-        """Test successful SQL generation."""
+    def test_get_function_call_success(self):
+        """Test successful function call extraction."""
+        # Mock a function call response
+        mock_fc = MagicMock()
+        mock_fc.name = "query_sales"
+        mock_fc.args = {"group_by": "category", "chart_type": "bar"}
+
+        mock_part = MagicMock()
+        mock_part.function_call = mock_fc
+
+        mock_content = MagicMock()
+        mock_content.parts = [mock_part]
+
+        mock_candidate = MagicMock()
+        mock_candidate.content = mock_content
+
         mock_response = MagicMock()
-        mock_response.text = '{"sql": "SELECT * FROM products", "chart_type": "bar"}'
+        mock_response.candidates = [mock_candidate]
 
         with patch("app.services.llm_service.Config") as mock_config, \
              patch("app.services.llm_service.genai") as mock_genai:
@@ -35,55 +49,26 @@ class TestLLMService:
             mock_genai.GenerativeModel.return_value = mock_model
 
             service = LLMService()
-            result = service.generate_sql("List all products")
+            result = service.get_function_call("Show sales by category")
 
-            assert result["sql"] == "SELECT * FROM products"
-            assert result["chart_type"] == "bar"
+            assert result["name"] == "query_sales"
+            assert result["args"]["group_by"] == "category"
+            assert result["args"]["chart_type"] == "bar"
 
-    def test_generate_sql_with_markdown_wrapper(self):
-        """Test that markdown code blocks are properly stripped."""
+    def test_no_function_call_in_response(self):
+        """Test handling when LLM returns text instead of function call."""
+        mock_part = MagicMock()
+        mock_part.function_call = None
+        del mock_part.function_call  # Simulate no function_call attribute
+
+        mock_content = MagicMock()
+        mock_content.parts = [mock_part]
+
+        mock_candidate = MagicMock()
+        mock_candidate.content = mock_content
+
         mock_response = MagicMock()
-        mock_response.text = '```json\n{"sql": "SELECT * FROM sales", "chart_type": "line"}\n```'
-
-        with patch("app.services.llm_service.Config") as mock_config, \
-             patch("app.services.llm_service.genai") as mock_genai:
-            mock_config.GEMINI_API_KEY = "test-key"
-            mock_config.GEMINI_MODEL = "gemini-2.5-flash"
-
-            mock_model = MagicMock()
-            mock_model.generate_content.return_value = mock_response
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            service = LLMService()
-            result = service.generate_sql("Show sales trend")
-
-            assert result["sql"] == "SELECT * FROM sales"
-
-    def test_rejects_insert_query(self):
-        """Test that INSERT queries are rejected."""
-        mock_response = MagicMock()
-        mock_response.text = '{"sql": "INSERT INTO products VALUES (1, \'test\')", "chart_type": "bar"}'
-
-        with patch("app.services.llm_service.Config") as mock_config, \
-             patch("app.services.llm_service.genai") as mock_genai:
-            mock_config.GEMINI_API_KEY = "test-key"
-            mock_config.GEMINI_MODEL = "gemini-2.5-flash"
-
-            mock_model = MagicMock()
-            mock_model.generate_content.return_value = mock_response
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            service = LLMService()
-
-            with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Add a product")
-
-            assert exc_info.value.error_type == ErrorType.DANGEROUS_SQL
-
-    def test_rejects_delete_query(self):
-        """Test that DELETE queries are rejected."""
-        mock_response = MagicMock()
-        mock_response.text = '{"sql": "DELETE FROM products WHERE id = 1", "chart_type": "bar"}'
+        mock_response.candidates = [mock_candidate]
 
         with patch("app.services.llm_service.Config") as mock_config, \
              patch("app.services.llm_service.genai") as mock_genai:
@@ -97,56 +82,14 @@ class TestLLMService:
             service = LLMService()
 
             with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Remove product")
-
-            assert exc_info.value.error_type == ErrorType.DANGEROUS_SQL
-
-    def test_rejects_drop_query(self):
-        """Test that DROP queries are rejected."""
-        mock_response = MagicMock()
-        mock_response.text = '{"sql": "DROP TABLE products", "chart_type": "bar"}'
-
-        with patch("app.services.llm_service.Config") as mock_config, \
-             patch("app.services.llm_service.genai") as mock_genai:
-            mock_config.GEMINI_API_KEY = "test-key"
-            mock_config.GEMINI_MODEL = "gemini-2.5-flash"
-
-            mock_model = MagicMock()
-            mock_model.generate_content.return_value = mock_response
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            service = LLMService()
-
-            with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Drop products table")
-
-            assert exc_info.value.error_type == ErrorType.DANGEROUS_SQL
-
-    def test_invalid_json_response(self):
-        """Test handling of invalid JSON from LLM."""
-        mock_response = MagicMock()
-        mock_response.text = "This is not valid JSON"
-
-        with patch("app.services.llm_service.Config") as mock_config, \
-             patch("app.services.llm_service.genai") as mock_genai:
-            mock_config.GEMINI_API_KEY = "test-key"
-            mock_config.GEMINI_MODEL = "gemini-2.5-flash"
-
-            mock_model = MagicMock()
-            mock_model.generate_content.return_value = mock_response
-            mock_genai.GenerativeModel.return_value = mock_model
-
-            service = LLMService()
-
-            with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Show data")
+                service.get_function_call("What's the weather?")
 
             assert exc_info.value.error_type == ErrorType.INVALID_RESPONSE
 
-    def test_missing_sql_field(self):
-        """Test handling of response missing sql field."""
+    def test_no_candidates(self):
+        """Test handling when LLM returns no candidates."""
         mock_response = MagicMock()
-        mock_response.text = '{"chart_type": "bar"}'
+        mock_response.candidates = []
 
         with patch("app.services.llm_service.Config") as mock_config, \
              patch("app.services.llm_service.genai") as mock_genai:
@@ -160,7 +103,7 @@ class TestLLMService:
             service = LLMService()
 
             with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Show data")
+                service.get_function_call("Show data")
 
             assert exc_info.value.error_type == ErrorType.INVALID_RESPONSE
 
@@ -178,7 +121,7 @@ class TestLLMService:
             service = LLMService()
 
             with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Show data")
+                service.get_function_call("Show data")
 
             assert exc_info.value.error_type == ErrorType.API_ERROR
             assert "API Error" in exc_info.value.message
@@ -197,6 +140,6 @@ class TestLLMService:
             service = LLMService()
 
             with pytest.raises(AppException) as exc_info:
-                service.generate_sql("Show data")
+                service.get_function_call("Show data")
 
             assert exc_info.value.error_type == ErrorType.RATE_LIMIT

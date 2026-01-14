@@ -5,24 +5,27 @@ from app.errors import ErrorType
 
 
 class TestQueryEndpoint:
-    """Tests for /api/v1/query endpoint."""
+    """Tests for /api/v1/query endpoint with function calling."""
 
     @pytest.mark.asyncio
     async def test_query_success(self, client):
-        """Test successful query with mocked LLM and DB."""
-        mock_llm_result = {
-            "sql": "SELECT category, SUM(total) FROM sales GROUP BY category",
-            "chart_type": "bar"
+        """Test successful query with mocked LLM and tool execution."""
+        mock_function_call = {
+            "name": "query_sales",
+            "args": {"group_by": "category", "chart_type": "bar"}
         }
-        mock_db_result = [
-            {"category": "Electronics", "total": 50000},
-            {"category": "Clothing", "total": 30000},
-        ]
+        mock_tool_result = {
+            "chart_type": "bar",
+            "rows": [
+                {"label": "Electronics", "value": 50000},
+                {"label": "Clothing", "value": 30000},
+            ]
+        }
 
         with patch("app.routers.query.llm_service") as mock_llm, \
-             patch("app.routers.query.db") as mock_db:
-            mock_llm.generate_sql.return_value = mock_llm_result
-            mock_db.execute_query = AsyncMock(return_value=mock_db_result)
+             patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
+            mock_llm.get_function_call.return_value = mock_function_call
+            mock_tool.return_value = mock_tool_result
 
             response = await client.post(
                 "/api/v1/query",
@@ -33,13 +36,14 @@ class TestQueryEndpoint:
             data = response.json()
             assert data["question"] == "Show sales by category"
             assert data["chart_type"] == "bar"
-            assert data["rows"] == mock_db_result
+            assert data["rows"] == mock_tool_result["rows"]
+            mock_tool.assert_called_once_with("query_sales", {"group_by": "category", "chart_type": "bar"})
 
     @pytest.mark.asyncio
     async def test_query_llm_failure(self, client):
         """Test query when LLM fails returns 400."""
         with patch("app.routers.query.llm_service") as mock_llm:
-            mock_llm.generate_sql.side_effect = AppException(
+            mock_llm.get_function_call.side_effect = AppException(
                 ErrorType.INVALID_RESPONSE, "Invalid response"
             )
 
@@ -54,7 +58,7 @@ class TestQueryEndpoint:
     async def test_query_rate_limit(self, client):
         """Test query when rate limited returns 429."""
         with patch("app.routers.query.llm_service") as mock_llm:
-            mock_llm.generate_sql.side_effect = AppException(
+            mock_llm.get_function_call.side_effect = AppException(
                 ErrorType.RATE_LIMIT, "Rate limit exceeded"
             )
 
@@ -69,7 +73,7 @@ class TestQueryEndpoint:
     async def test_query_not_configured(self, client):
         """Test query when LLM not configured returns 503."""
         with patch("app.routers.query.llm_service") as mock_llm:
-            mock_llm.generate_sql.side_effect = AppException(
+            mock_llm.get_function_call.side_effect = AppException(
                 ErrorType.NOT_CONFIGURED, "Gemini API key not configured"
             )
 
@@ -81,19 +85,17 @@ class TestQueryEndpoint:
             assert response.status_code == 503
 
     @pytest.mark.asyncio
-    async def test_query_db_error(self, client):
-        """Test query when database fails returns 500."""
-        mock_llm_result = {
-            "sql": "SELECT * FROM sales",
-            "chart_type": "bar"
+    async def test_query_tool_error(self, client):
+        """Test query when tool execution fails returns 500."""
+        mock_function_call = {
+            "name": "query_sales",
+            "args": {"group_by": "category", "chart_type": "bar"}
         }
 
         with patch("app.routers.query.llm_service") as mock_llm, \
-             patch("app.routers.query.db") as mock_db:
-            mock_llm.generate_sql.return_value = mock_llm_result
-            mock_db.execute_query = AsyncMock(
-                side_effect=Exception("Database connection failed")
-            )
+             patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
+            mock_llm.get_function_call.return_value = mock_function_call
+            mock_tool.side_effect = Exception("Database connection failed")
 
             response = await client.post(
                 "/api/v1/query",
@@ -104,16 +106,20 @@ class TestQueryEndpoint:
 
     @pytest.mark.asyncio
     async def test_query_empty_result(self, client):
-        """Test query with empty database result."""
-        mock_llm_result = {
-            "sql": "SELECT * FROM sales WHERE year = 2030",
-            "chart_type": "bar"
+        """Test query with empty tool result."""
+        mock_function_call = {
+            "name": "query_sales",
+            "args": {"group_by": "year", "years": [2030], "chart_type": "bar"}
+        }
+        mock_tool_result = {
+            "chart_type": "bar",
+            "rows": []
         }
 
         with patch("app.routers.query.llm_service") as mock_llm, \
-             patch("app.routers.query.db") as mock_db:
-            mock_llm.generate_sql.return_value = mock_llm_result
-            mock_db.execute_query = AsyncMock(return_value=[])
+             patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
+            mock_llm.get_function_call.return_value = mock_function_call
+            mock_tool.return_value = mock_tool_result
 
             response = await client.post(
                 "/api/v1/query",
@@ -129,3 +135,33 @@ class TestQueryEndpoint:
         """Test query with missing question field."""
         response = await client.post("/api/v1/query", json={})
         assert response.status_code == 422  # Validation error
+
+    @pytest.mark.asyncio
+    async def test_query_products(self, client):
+        """Test query for products."""
+        mock_function_call = {
+            "name": "query_products",
+            "args": {"select": "top_selling", "limit": 5, "chart_type": "bar"}
+        }
+        mock_tool_result = {
+            "chart_type": "bar",
+            "rows": [
+                {"label": "Product A", "value": 10000},
+                {"label": "Product B", "value": 8000},
+            ]
+        }
+
+        with patch("app.routers.query.llm_service") as mock_llm, \
+             patch("app.routers.query.execute_tool", new_callable=AsyncMock) as mock_tool:
+            mock_llm.get_function_call.return_value = mock_function_call
+            mock_tool.return_value = mock_tool_result
+
+            response = await client.post(
+                "/api/v1/query",
+                json={"question": "What are top 5 selling products?"}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["chart_type"] == "bar"
+            assert len(data["rows"]) == 2
