@@ -125,8 +125,10 @@ DataToVisual/
 
 ## Database Schema
 
+![Database Schema](docs/database-schema.png)
+
 - **products**: id, name, category, price, created_at
-- **features**: id, product_id, name, description
-- **sales**: id, product_id, quantity, total_amount, sale_date
+- **features**: id, product_id, name, description (FK → products)
+- **sales**: id, product_id, quantity, total_amount, sale_date (FK → products)
 
 Sales data spans 2022-2026 with realistic growth trends.
