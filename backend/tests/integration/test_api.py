@@ -32,7 +32,6 @@ class TestAPIIntegration:
     async def test_query_with_real_db(self):
         """Test query endpoint with real database, mocked LLM."""
         mock_llm_result = {
-            "success": True,
             "sql": "SELECT category, COUNT(*) as count FROM products GROUP BY category",
             "chart_type": "bar"
         }
@@ -51,7 +50,6 @@ class TestAPIIntegration:
 
                 assert response.status_code == 200
                 data = response.json()
-                assert data["success"] is True
                 assert data["chart_type"] == "bar"
                 assert len(data["data"]["labels"]) > 0
 
@@ -59,7 +57,6 @@ class TestAPIIntegration:
     async def test_query_sales_trend(self):
         """Test querying sales trend with real database."""
         mock_llm_result = {
-            "success": True,
             "sql": """
                 SELECT EXTRACT(YEAR FROM sale_date) as year, SUM(total_amount) as total
                 FROM sales
@@ -83,7 +80,6 @@ class TestAPIIntegration:
 
                 assert response.status_code == 200
                 data = response.json()
-                assert data["success"] is True
                 assert data["chart_type"] == "line"
                 # Should have 5 years of data
                 assert len(data["data"]["labels"]) == 5
@@ -94,7 +90,6 @@ class TestAPIIntegration:
     async def test_query_top_products(self):
         """Test querying top products with real database."""
         mock_llm_result = {
-            "success": True,
             "sql": """
                 SELECT p.name, SUM(s.total_amount) as total
                 FROM sales s
@@ -120,14 +115,12 @@ class TestAPIIntegration:
 
                 assert response.status_code == 200
                 data = response.json()
-                assert data["success"] is True
                 assert len(data["data"]["labels"]) == 5
 
     @pytest.mark.asyncio
     async def test_query_invalid_sql(self):
         """Test that invalid SQL returns 500 error."""
         mock_llm_result = {
-            "success": True,
             "sql": "SELECT * FROM nonexistent_table",
             "chart_type": "bar"
         }
@@ -150,7 +143,6 @@ class TestAPIIntegration:
     async def test_chart_data_format(self):
         """Test that chart data is properly formatted for Chart.js."""
         mock_llm_result = {
-            "success": True,
             "sql": """
                 SELECT p.category, SUM(s.total_amount) as total_sales
                 FROM sales s
@@ -173,7 +165,6 @@ class TestAPIIntegration:
                 )
 
                 data = response.json()
-                assert data["success"] is True
 
                 # Verify Chart.js format
                 chart_data = data["data"]

@@ -4,7 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.db.database import db
-from app.routers import query
+from app.routers import query, health
+from app.exceptions import AppException, app_exception_handler
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +28,9 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Register exception handlers
+app.add_exception_handler(AppException, app_exception_handler)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,4 +39,5 @@ app.add_middleware(
 )
 
 # Include routers
+app.include_router(health.router)
 app.include_router(query.router)

@@ -18,7 +18,6 @@ def mock_db():
 def mock_llm_response():
     """Mock LLM service response."""
     return {
-        "success": True,
         "sql": "SELECT category, SUM(total_amount) as total FROM sales GROUP BY category",
         "chart_type": "bar"
     }
