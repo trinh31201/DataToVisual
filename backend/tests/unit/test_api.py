@@ -33,7 +33,6 @@ class TestQueryEndpoint:
             data = response.json()
             assert data["question"] == "Show sales by category"
             assert data["chart_type"] == "bar"
-            assert data["columns"] == ["category", "total"]
             assert data["rows"] == mock_db_result
 
     @pytest.mark.asyncio
@@ -123,7 +122,6 @@ class TestQueryEndpoint:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["columns"] == []
             assert data["rows"] == []
 
     @pytest.mark.asyncio

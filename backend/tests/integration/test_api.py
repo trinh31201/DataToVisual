@@ -41,7 +41,7 @@ class TestAPIIntegration:
                 data = response.json()
                 assert data["chart_type"] == "bar"
                 assert len(data["rows"]) > 0
-                assert "category" in data["columns"]
+                assert "category" in data["rows"][0]
 
     @pytest.mark.asyncio
     async def test_query_sales_trend(self):
@@ -73,8 +73,8 @@ class TestAPIIntegration:
                 assert data["chart_type"] == "line"
                 # Should have 5 years of data
                 assert len(data["rows"]) == 5
-                assert "year" in data["columns"]
-                assert "total" in data["columns"]
+                assert "year" in data["rows"][0]
+                assert "total" in data["rows"][0]
 
     @pytest.mark.asyncio
     async def test_query_top_products(self):
@@ -157,13 +157,11 @@ class TestAPIIntegration:
                 data = response.json()
 
                 # Verify raw data format
-                assert "columns" in data
                 assert "rows" in data
-                assert isinstance(data["columns"], list)
                 assert isinstance(data["rows"], list)
 
-                # Each row should be a dict with column keys
+                # Each row should be a dict
                 for row in data["rows"]:
                     assert isinstance(row, dict)
-                    for col in data["columns"]:
-                        assert col in row
+                    assert "category" in row
+                    assert "total_sales" in row

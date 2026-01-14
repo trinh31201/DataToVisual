@@ -9,5 +9,4 @@ class QueryRequest(BaseModel):
 class QueryResponse(BaseModel):
     question: str
     chart_type: str
-    columns: list[str]
     rows: list[dict[str, Any]]

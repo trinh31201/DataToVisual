@@ -39,14 +39,16 @@ async function submitQuery() {
 
 /**
  * Convert raw data from API to Chart.js format
- * @param {string[]} columns - Column names
  * @param {Object[]} rows - Array of row objects
  * @returns {Object} Chart.js data format {labels, datasets}
  */
-function toChartData(columns, rows) {
+function toChartData(rows) {
     if (!rows || rows.length === 0) {
         return { labels: [], datasets: [] };
     }
+
+    // Extract columns from first row
+    const columns = Object.keys(rows[0]);
 
     // First column is labels, rest are datasets
     const labelColumn = columns[0];
@@ -64,7 +66,7 @@ function toChartData(columns, rows) {
 
 function showResult(data) {
     document.getElementById('result').classList.remove('hidden');
-    const chartData = toChartData(data.columns, data.rows);
+    const chartData = toChartData(data.rows);
     renderChart(data.chart_type, chartData);
 }
 

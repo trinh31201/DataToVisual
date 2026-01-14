@@ -30,11 +30,8 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=500, detail="Failed to execute query")
 
     # 3. Return raw data (frontend formats for chart)
-    columns = list(rows[0].keys()) if rows else []
-
     return QueryResponse(
         question=request.question,
         chart_type=chart_type,
-        columns=columns,
         rows=rows
     )
