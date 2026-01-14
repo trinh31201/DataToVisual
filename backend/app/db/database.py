@@ -65,7 +65,6 @@ TABLE products:
 - category (VARCHAR): Product category ('Electronics', 'Clothing', 'Food', 'Home')
 - price (DECIMAL): Unit price
 - created_at (TIMESTAMP): When product was added
-- updated_at (TIMESTAMP): When product was last updated
 
 TABLE features:
 - id (INT, PRIMARY KEY): Unique feature identifier
@@ -73,7 +72,6 @@ TABLE features:
 - name (VARCHAR): Feature name
 - description (TEXT): Feature description
 - created_at (TIMESTAMP): When feature was added
-- updated_at (TIMESTAMP): When feature was last updated
 
 TABLE sales:
 - id (INT, PRIMARY KEY): Unique sale identifier
@@ -82,7 +80,6 @@ TABLE sales:
 - total_amount (DECIMAL): Total sale amount
 - sale_date (DATE): Date of sale (2022-2026)
 - created_at (TIMESTAMP): When sale was recorded
-- updated_at (TIMESTAMP): When sale was last updated
 
 RELATIONSHIPS:
 - products 1:N features

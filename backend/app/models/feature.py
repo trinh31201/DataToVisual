@@ -11,7 +11,6 @@ class Feature(Base):
     name = Column(String(255), nullable=False)
     description = Column(Text)
     created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     # Relationships
     product = relationship("Product", back_populates="features")

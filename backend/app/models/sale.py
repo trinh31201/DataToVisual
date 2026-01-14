@@ -12,7 +12,6 @@ class Sale(Base):
     total_amount = Column(Numeric(12, 2), nullable=False)
     sale_date = Column(Date, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
     # Relationships
     product = relationship("Product", back_populates="sales")
