@@ -1,9 +1,11 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 from httpx import AsyncClient, ASGITransport
 
 from app.main import app
 from app.db.database import db
+from app.exceptions import AppException
+from app.errors import ErrorType
 
 
 @pytest.fixture(autouse=True)
@@ -15,18 +17,23 @@ async def setup_db():
 
 
 class TestAPIIntegration:
-    """Integration tests for API with real database using function calling."""
+    """Integration tests for API with real database using MCP."""
 
     @pytest.mark.asyncio
     async def test_query_with_real_db(self):
-        """Test query endpoint with real database, mocked LLM function call."""
-        mock_function_call = {
-            "name": "query_products",
-            "args": {"select": "by_category", "chart_type": "bar"}
+        """Test query endpoint with real database, mocked MCP client."""
+        mock_result = {
+            "chart_type": "bar",
+            "rows": [
+                {"label": "Electronics", "value": 3},
+                {"label": "Clothing", "value": 3},
+                {"label": "Food", "value": 3},
+                {"label": "Home", "value": 3}
+            ]
         }
 
-        with patch("app.routers.query.ai_service") as mock_llm:
-            mock_llm.get_function_call.return_value = mock_function_call
+        with patch("app.routers.query.mcp_client") as mock_mcp:
+            mock_mcp.query = AsyncMock(return_value=mock_result)
 
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -46,14 +53,20 @@ class TestAPIIntegration:
 
     @pytest.mark.asyncio
     async def test_query_sales_trend(self):
-        """Test querying sales trend with real database."""
-        mock_function_call = {
-            "name": "query_sales",
-            "args": {"group_by": "year", "chart_type": "line", "order": "ASC"}
+        """Test querying sales trend with mocked MCP client."""
+        mock_result = {
+            "chart_type": "line",
+            "rows": [
+                {"label": 2022, "value": 100000},
+                {"label": 2023, "value": 120000},
+                {"label": 2024, "value": 140000},
+                {"label": 2025, "value": 160000},
+                {"label": 2026, "value": 180000}
+            ]
         }
 
-        with patch("app.routers.query.ai_service") as mock_llm:
-            mock_llm.get_function_call.return_value = mock_function_call
+        with patch("app.routers.query.mcp_client") as mock_mcp:
+            mock_mcp.query = AsyncMock(return_value=mock_result)
 
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -67,21 +80,26 @@ class TestAPIIntegration:
                 assert response.status_code == 200
                 data = response.json()
                 assert data["chart_type"] == "line"
-                # Should have 5 years of data
                 assert len(data["rows"]) == 5
                 assert "label" in data["rows"][0]
                 assert "value" in data["rows"][0]
 
     @pytest.mark.asyncio
     async def test_query_top_products(self):
-        """Test querying top products with real database."""
-        mock_function_call = {
-            "name": "query_products",
-            "args": {"select": "top_selling", "limit": 5, "chart_type": "bar"}
+        """Test querying top products with mocked MCP client."""
+        mock_result = {
+            "chart_type": "bar",
+            "rows": [
+                {"label": "Product A", "value": 50000},
+                {"label": "Product B", "value": 40000},
+                {"label": "Product C", "value": 30000},
+                {"label": "Product D", "value": 20000},
+                {"label": "Product E", "value": 10000}
+            ]
         }
 
-        with patch("app.routers.query.ai_service") as mock_llm:
-            mock_llm.get_function_call.return_value = mock_function_call
+        with patch("app.routers.query.mcp_client") as mock_mcp:
+            mock_mcp.query = AsyncMock(return_value=mock_result)
 
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -97,15 +115,12 @@ class TestAPIIntegration:
                 assert len(data["rows"]) == 5
 
     @pytest.mark.asyncio
-    async def test_query_unknown_tool(self):
-        """Test that unknown tool returns 500 error."""
-        mock_function_call = {
-            "name": "unknown_tool",
-            "args": {}
-        }
-
-        with patch("app.routers.query.ai_service") as mock_llm:
-            mock_llm.get_function_call.return_value = mock_function_call
+    async def test_query_error(self):
+        """Test that error from MCP client returns 500."""
+        with patch("app.routers.query.mcp_client") as mock_mcp:
+            mock_mcp.query = AsyncMock(side_effect=AppException(
+                ErrorType.INTERNAL_ERROR, "Database error"
+            ))
 
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -121,13 +136,16 @@ class TestAPIIntegration:
     @pytest.mark.asyncio
     async def test_response_format(self):
         """Test that response has correct format with label and value."""
-        mock_function_call = {
-            "name": "query_sales",
-            "args": {"group_by": "category", "chart_type": "pie"}
+        mock_result = {
+            "chart_type": "pie",
+            "rows": [
+                {"label": "Electronics", "value": 50000},
+                {"label": "Clothing", "value": 30000}
+            ]
         }
 
-        with patch("app.routers.query.ai_service") as mock_llm:
-            mock_llm.get_function_call.return_value = mock_function_call
+        with patch("app.routers.query.mcp_client") as mock_mcp:
+            mock_mcp.query = AsyncMock(return_value=mock_result)
 
             async with AsyncClient(
                 transport=ASGITransport(app=app),
@@ -153,17 +171,16 @@ class TestAPIIntegration:
     @pytest.mark.asyncio
     async def test_query_sales_by_year_filter(self):
         """Test querying sales filtered by specific years."""
-        mock_function_call = {
-            "name": "query_sales",
-            "args": {
-                "group_by": "year",
-                "years": [2022, 2026],
-                "chart_type": "bar"
-            }
+        mock_result = {
+            "chart_type": "bar",
+            "rows": [
+                {"label": 2022, "value": 100000},
+                {"label": 2026, "value": 180000}
+            ]
         }
 
-        with patch("app.routers.query.ai_service") as mock_llm:
-            mock_llm.get_function_call.return_value = mock_function_call
+        with patch("app.routers.query.mcp_client") as mock_mcp:
+            mock_mcp.query = AsyncMock(return_value=mock_result)
 
             async with AsyncClient(
                 transport=ASGITransport(app=app),

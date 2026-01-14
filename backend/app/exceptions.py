@@ -1,6 +1,9 @@
+import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from app.errors import ErrorType, ERROR_STATUS_MAP
+
+logger = logging.getLogger(__name__)
 
 
 class AppException(Exception):
@@ -18,4 +21,13 @@ async def app_exception_handler(_request: Request, exc: AppException) -> JSONRes
     return JSONResponse(
         status_code=status_code,
         content={"detail": exc.message}
+    )
+
+
+async def generic_exception_handler(_request: Request, exc: Exception) -> JSONResponse:
+    """Global handler for unhandled exceptions - returns 500."""
+    logger.error(f"Unhandled exception: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
     )

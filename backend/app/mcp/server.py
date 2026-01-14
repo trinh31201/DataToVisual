@@ -1,16 +1,29 @@
 """
-MCP Server - exposes database tools to ANY AI provider.
-Write once, works with Claude, Gemini, GPT, etc.
+Full MCP Server - runs as separate process.
+AI discovers tools automatically via list_tools().
 """
-from app.db.database import db
+import asyncio
+import json
+import sys
+import os
+
+# Add parent directory to path for imports when running as subprocess
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+from mcp.types import Tool, TextContent
+
+# Create MCP server
+server = Server("datatovisual")
 
 
-# Tool definitions in MCP format (AI-agnostic)
+# Tool definitions
 TOOLS = [
-    {
-        "name": "query_sales",
-        "description": "Query sales data with aggregation. Use for questions about sales, revenue, trends.",
-        "input_schema": {
+    Tool(
+        name="query_sales",
+        description="Query sales data with aggregation. Use for questions about sales, revenue, trends.",
+        inputSchema={
             "type": "object",
             "properties": {
                 "group_by": {
@@ -45,11 +58,11 @@ TOOLS = [
             },
             "required": ["group_by", "chart_type"]
         }
-    },
-    {
-        "name": "query_products",
-        "description": "Query product data. Use for questions about products, categories.",
-        "input_schema": {
+    ),
+    Tool(
+        name="query_products",
+        description="Query product data. Use for questions about products, categories.",
+        inputSchema={
             "type": "object",
             "properties": {
                 "select": {
@@ -69,21 +82,40 @@ TOOLS = [
             },
             "required": ["select", "chart_type"]
         }
-    }
+    )
 ]
 
 
-async def execute_tool(name: str, args: dict) -> dict:
-    """Execute a tool and return results."""
-    if name == "query_sales":
-        return await query_sales(**args)
-    elif name == "query_products":
-        return await query_products(**args)
-    else:
-        raise ValueError(f"Unknown tool: {name}")
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    """AI calls this to discover available tools."""
+    return TOOLS
+
+
+@server.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    """AI calls this to execute a tool."""
+    from app.db.database import db
+
+    # Connect to database if not connected
+    if not db.pool:
+        await db.connect()
+
+    try:
+        if name == "query_sales":
+            result = await query_sales(db, **arguments)
+        elif name == "query_products":
+            result = await query_products(db, **arguments)
+        else:
+            raise ValueError(f"Unknown tool: {name}")
+
+        return [TextContent(type="text", text=json.dumps(result))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
 async def query_sales(
+    db,
     group_by: str,
     chart_type: str,
     aggregate: str = "SUM",
@@ -92,8 +124,6 @@ async def query_sales(
     order: str = "DESC"
 ) -> dict:
     """Query sales - builds SQL safely from parameters."""
-
-    # Map group_by to SQL column
     group_map = {
         "category": "p.category",
         "year": "EXTRACT(YEAR FROM s.sale_date)",
@@ -102,14 +132,12 @@ async def query_sales(
     }
     group_col = group_map[group_by]
 
-    # Build SQL safely
     sql = f"""
         SELECT {group_col} as label, {aggregate}(s.total_amount) as value
         FROM sales s
         JOIN products p ON s.product_id = p.id
     """
 
-    # Add year filter if specified
     if years:
         years_str = ", ".join(str(y) for y in years)
         sql += f" WHERE EXTRACT(YEAR FROM s.sale_date) IN ({years_str})"
@@ -129,12 +157,12 @@ async def query_sales(
 
 
 async def query_products(
+    db,
     select: str,
     chart_type: str,
     limit: int = None
 ) -> dict:
     """Query products - builds SQL safely from parameters."""
-
     if select == "all":
         sql = "SELECT name as label, price as value FROM products"
     elif select == "by_category":
@@ -157,3 +185,17 @@ async def query_products(
         "chart_type": chart_type,
         "rows": rows
     }
+
+
+async def main():
+    """Run the MCP server."""
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            server.create_initialization_options()
+        )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

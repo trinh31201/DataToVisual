@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from app.db.database import db
 from app.routers import query
-from app.exceptions import AppException, app_exception_handler
+from app.exceptions import AppException, app_exception_handler, generic_exception_handler
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +30,7 @@ app = FastAPI(
 
 # Register exception handlers
 app.add_exception_handler(AppException, app_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
 
 app.add_middleware(
     CORSMiddleware,
