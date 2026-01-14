@@ -26,13 +26,13 @@ class LLMService:
         if not self.model:
             raise AppException(ErrorType.NOT_CONFIGURED, "Gemini API key not configured")
 
-        prompt = f"""You are a SQL expert. Given a natural language question, generate a PostgreSQL query.
+        prompt = f"""You are a SQL expert. Given a natural language question, generate a {Config.DATABASE_TYPE} query.
 
 {SCHEMA_DESCRIPTION}
 
 RULES:
 1. Only generate SELECT queries (no INSERT, UPDATE, DELETE, DROP)
-2. Use proper PostgreSQL syntax
+2. Use proper {Config.DATABASE_TYPE} syntax
 3. Return results that can be visualized in a chart
 4. Choose appropriate chart type based on the question:
    - Time trends/changes over time → "line"

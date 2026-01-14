@@ -7,6 +7,7 @@ class Config:
         "DATABASE_URL",
         "postgresql://datatovisual:datatovisual123@localhost:5432/datatovisual"
     )
+    DATABASE_TYPE = os.getenv("DATABASE_TYPE", "PostgreSQL")
 
     # Gemini API
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")

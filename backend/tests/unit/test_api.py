@@ -4,16 +4,6 @@ from app.exceptions import AppException
 from app.errors import ErrorType
 
 
-class TestHealthEndpoint:
-    """Tests for /api/v1/health endpoint."""
-
-    @pytest.mark.asyncio
-    async def test_health_returns_ok(self, client):
-        response = await client.get("/api/v1/health")
-        assert response.status_code == 200
-        assert response.json() == {"status": "ok"}
-
-
 class TestQueryEndpoint:
     """Tests for /api/v1/query endpoint."""
 
