@@ -23,3 +23,6 @@ class Config:
     # OpenAI
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
+
+    # MCP Server
+    MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:3001/sse")

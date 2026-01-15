@@ -1,14 +1,13 @@
 """
-MCP Client - connects to MCP server and AI providers.
-Tools are discovered automatically from MCP server.
+MCP Client - connects to MCP server via HTTP/SSE.
+Generic approach where AI writes raw SQL.
+Schema is discovered dynamically from MCP server.
 """
 import json
 import logging
-import sys
-import os
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
 from app.config import Config
 from app.errors import ErrorType
@@ -18,11 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 class MCPClient:
-    """Full MCP client - discovers tools from MCP server."""
+    """MCP client - connects to MCP server via HTTP."""
 
     def __init__(self):
         self.provider = Config.AI_PROVIDER
         self.ai_client = None
+        self.mcp_server_url = Config.MCP_SERVER_URL
         self._init_ai_client()
 
     def _init_ai_client(self):
@@ -46,26 +46,16 @@ class MCPClient:
             genai.configure(api_key=Config.GEMINI_API_KEY)
             self.ai_client = genai
 
-    def _get_mcp_server_params(self) -> StdioServerParameters:
-        """Get parameters to start MCP server subprocess."""
-        return StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "app.mcp.server"],
-            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-            env={
-                **os.environ,
-                "DATABASE_URL": Config.DATABASE_URL
-            }
-        )
-
     async def query(self, question: str) -> dict:
         """
-        Full MCP flow:
-        1. Connect to MCP server
-        2. Get tools via list_tools() (auto-discovery!)
-        3. Send to AI with tools
-        4. Execute tool via call_tool()
-        5. Return result
+        Generic MCP flow via HTTP:
+        1. Connect to MCP server via SSE
+        2. Get tools from server
+        3. Read schema from resource (schema://database)
+        4. Get prompt from server (data_analyst)
+        5. AI writes SQL
+        6. Execute via query tool
+        7. Return result
         """
         if not self.ai_client:
             raise AppException(
@@ -73,37 +63,37 @@ class MCPClient:
                 f"{self.provider.upper()} API key not configured"
             )
 
-        server_params = self._get_mcp_server_params()
-
-        async with stdio_client(server_params) as (read, write):
+        # Connect to MCP server via HTTP/SSE
+        async with sse_client(self.mcp_server_url) as (read, write):
             async with ClientSession(read, write) as session:
-                # Initialize connection
                 await session.initialize()
 
-                # 1. Get tools from MCP server (auto-discovery!)
                 tools_response = await session.list_tools()
                 tools = tools_response.tools
 
                 logger.info(f"Discovered {len(tools)} tools from MCP server")
 
-                # 2. Get function call from AI
+                # Step 1: Discover schema dynamically
+                schema = await self._discover_schema(session)
+                logger.info(f"Discovered schema: {len(schema)} tables")
+
+                # Step 2: Get function call from AI (AI writes SQL)
                 try:
-                    function_call = await self._get_function_call(question, tools)
+                    function_call = await self._get_function_call(question, tools, schema, session)
                 except Exception as e:
                     error_str = str(e)
                     if "429" in error_str or "quota" in error_str.lower():
                         raise AppException(ErrorType.RATE_LIMIT, "Rate limit exceeded")
                     raise AppException(ErrorType.API_ERROR, error_str)
 
-                logger.info(f"AI returned function call: {function_call}")
+                logger.info(f"AI returned: {function_call}")
 
-                # 3. Execute tool via MCP server
+                # Step 3: Execute tool via MCP server
                 result = await session.call_tool(
                     function_call["name"],
                     function_call["args"]
                 )
 
-                # Parse result
                 data = json.loads(result.content[0].text)
 
                 if "error" in data:
@@ -111,18 +101,24 @@ class MCPClient:
 
                 return data
 
-    async def _get_function_call(self, question: str, tools: list) -> dict:
-        """Get function call from AI provider with MCP tools."""
-        prompt = f"""You are a data analyst. Based on the user's question,
-call the appropriate function to query the database.
+    async def _discover_schema(self, session: ClientSession) -> str:
+        """Read database schema from MCP resource."""
+        # Read schema from database (always up-to-date)
+        schema_result = await session.read_resource("schema://database")
+        return schema_result.contents[0].text
 
-Available data:
-- Sales data (can group by category, year, month, product)
-- Product data (can get all, by category, or top selling)
+    async def _get_function_call(
+        self, question: str, tools: list, schema: str, session: ClientSession
+    ) -> dict:
+        """Get function call from AI - AI writes SQL."""
+        # Get prompt from MCP server
+        prompt_result = await session.get_prompt(
+            "data_analyst",
+            {"schema": schema, "question": question}
+        )
+        prompt = prompt_result.messages[0].content.text
 
-User question: {question}
-
-Call the appropriate function with the right parameters."""
+        logger.info("Using prompt from MCP server")
 
         if self.provider == "claude":
             return await self._call_claude(prompt, tools)
@@ -133,7 +129,6 @@ Call the appropriate function with the right parameters."""
 
     async def _call_claude(self, prompt: str, tools: list) -> dict:
         """Call Claude with tools from MCP server."""
-        # Convert MCP tools to Claude format
         claude_tools = [
             {
                 "name": t.name,
@@ -161,7 +156,6 @@ Call the appropriate function with the right parameters."""
 
     async def _call_openai(self, prompt: str, tools: list) -> dict:
         """Call OpenAI with tools from MCP server."""
-        # Convert MCP tools to OpenAI format
         openai_tools = [
             {
                 "type": "function",
@@ -196,11 +190,10 @@ Call the appropriate function with the right parameters."""
         """Call Gemini with tools from MCP server."""
         genai = self.ai_client
 
-        # Convert MCP tools to Gemini format
         gemini_tools = []
         for t in tools:
             properties = {}
-            for prop_name, prop_def in t.inputSchema["properties"].items():
+            for prop_name, prop_def in t.inputSchema.get("properties", {}).items():
                 prop_schema = {"type": genai.protos.Type.STRING}
 
                 if prop_def.get("type") == "integer":

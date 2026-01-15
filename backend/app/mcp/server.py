@@ -1,89 +1,188 @@
 """
-Full MCP Server - runs as separate process.
-AI discovers tools automatically via list_tools().
+Generic MCP Server with HTTP/SSE transport.
+Can be used externally by any MCP client (Claude Desktop, Cursor, etc.)
 """
-import asyncio
 import json
 import sys
 import os
+import logging
 
-# Add parent directory to path for imports when running as subprocess
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from mcp.server.sse import SseServerTransport
+from mcp.types import Tool, TextContent, Prompt, PromptMessage, PromptArgument, Resource
+from starlette.applications import Starlette
+from starlette.routing import Route, Mount
+from starlette.responses import JSONResponse
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Create MCP server
 server = Server("datatovisual")
 
+# SSE transport for HTTP
+sse = SseServerTransport("/messages/")
 
-# Tool definitions
+
+# Resources - data AI can read
+RESOURCES = [
+    Resource(
+        uri="schema://database",
+        name="Database Schema",
+        description="Database schema from database (always up-to-date)",
+        mimeType="text/plain"
+    )
+]
+
+
+# Prompts for AI
+PROMPTS = [
+    Prompt(
+        name="data_analyst",
+        description="Prompt for analyzing data and writing SQL queries",
+        arguments=[
+            PromptArgument(
+                name="schema",
+                description="Database schema information",
+                required=True
+            ),
+            PromptArgument(
+                name="question",
+                description="User's question about the data",
+                required=True
+            )
+        ]
+    )
+]
+
+
+# Generic database tools
 TOOLS = [
     Tool(
-        name="query_sales",
-        description="Query sales data with aggregation. Use for questions about sales, revenue, trends.",
+        name="query",
+        description="Execute a SQL query against the database. Returns rows as JSON.",
         inputSchema={
             "type": "object",
             "properties": {
-                "group_by": {
+                "sql": {
                     "type": "string",
-                    "enum": ["category", "year", "month", "product"],
-                    "description": "How to group the sales data"
-                },
-                "aggregate": {
-                    "type": "string",
-                    "enum": ["SUM", "COUNT", "AVG"],
-                    "description": "Aggregation function"
-                },
-                "years": {
-                    "type": "array",
-                    "items": {"type": "integer"},
-                    "description": "Filter by specific years"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Limit number of results"
-                },
-                "order": {
-                    "type": "string",
-                    "enum": ["ASC", "DESC"],
-                    "description": "Sort order"
+                    "description": "The SQL query to execute (SELECT only)"
                 },
                 "chart_type": {
                     "type": "string",
                     "enum": ["bar", "line", "pie"],
-                    "description": "Type of chart to display"
+                    "description": "Type of chart to display the results"
                 }
             },
-            "required": ["group_by", "chart_type"]
+            "required": ["sql", "chart_type"]
         }
     ),
     Tool(
-        name="query_products",
-        description="Query product data. Use for questions about products, categories.",
+        name="list_tables",
+        description="List all tables in the database",
+        inputSchema={
+            "type": "object",
+            "properties": {}
+        }
+    ),
+    Tool(
+        name="describe_table",
+        description="Get schema of a table (columns, types)",
         inputSchema={
             "type": "object",
             "properties": {
-                "select": {
+                "table_name": {
                     "type": "string",
-                    "enum": ["all", "by_category", "top_selling"],
-                    "description": "What product data to get"
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Limit number of results"
-                },
-                "chart_type": {
-                    "type": "string",
-                    "enum": ["bar", "line", "pie"],
-                    "description": "Type of chart to display"
+                    "description": "Name of the table to describe"
                 }
             },
-            "required": ["select", "chart_type"]
+            "required": ["table_name"]
         }
     )
 ]
+
+
+@server.list_resources()
+async def list_resources() -> list[Resource]:
+    """List available resources."""
+    return RESOURCES
+
+
+@server.read_resource()
+async def read_resource(uri: str) -> str:
+    """Read a resource by URI."""
+    if uri == "schema://database":
+        from app.db.database import db
+
+        if not db.pool:
+            await db.connect()
+
+        # Get list of tables
+        tables_sql = """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+        """
+        tables = await db.execute_query(tables_sql)
+
+        # Build schema string
+        schema_parts = ["DATABASE SCHEMA:", ""]
+
+        for table_row in tables:
+            table_name = table_row["table_name"]
+
+            # Get columns for this table
+            columns_sql = f"""
+                SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_name = '{table_name}'
+                ORDER BY ordinal_position
+            """
+            columns = await db.execute_query(columns_sql)
+
+            schema_parts.append(f"Table: {table_name}")
+            for col in columns:
+                nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
+                schema_parts.append(f"  - {col['column_name']}: {col['data_type']} ({nullable})")
+            schema_parts.append("")
+
+        return "\n".join(schema_parts)
+
+    raise ValueError(f"Unknown resource: {uri}")
+
+
+@server.list_prompts()
+async def list_prompts() -> list[Prompt]:
+    """List available prompts."""
+    return PROMPTS
+
+
+@server.get_prompt()
+async def get_prompt(name: str, arguments: dict | None = None) -> list[PromptMessage]:
+    """Get a prompt by name with arguments filled in."""
+    if name == "data_analyst":
+        schema = arguments.get("schema", "") if arguments else ""
+        question = arguments.get("question", "") if arguments else ""
+
+        content = f"""You are a data analyst. Write SQL to answer the user's question.
+
+{schema}
+
+IMPORTANT:
+- Use the 'query' tool to execute SQL
+- Always SELECT with column aliases 'label' and 'value' for chart data
+- Example: SELECT category AS label, SUM(total_amount) AS value FROM ...
+- Choose appropriate chart_type: bar (comparisons), line (trends), pie (proportions)
+
+User question: {question}
+
+Call the 'query' tool with your SQL and chart_type."""
+
+        return [PromptMessage(role="user", content=TextContent(type="text", text=content))]
+
+    raise ValueError(f"Unknown prompt: {name}")
 
 
 @server.list_tools()
@@ -97,105 +196,106 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """AI calls this to execute a tool."""
     from app.db.database import db
 
-    # Connect to database if not connected
     if not db.pool:
         await db.connect()
 
     try:
-        if name == "query_sales":
-            result = await query_sales(db, **arguments)
-        elif name == "query_products":
-            result = await query_products(db, **arguments)
+        if name == "query":
+            result = await execute_query(db, **arguments)
+        elif name == "list_tables":
+            result = await list_tables_impl(db)
+        elif name == "describe_table":
+            result = await describe_table_impl(db, **arguments)
         else:
             raise ValueError(f"Unknown tool: {name}")
 
         return [TextContent(type="text", text=json.dumps(result))]
     except Exception as e:
+        logger.error(f"Tool error: {e}")
         return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
-async def query_sales(
-    db,
-    group_by: str,
-    chart_type: str,
-    aggregate: str = "SUM",
-    years: list[int] = None,
-    limit: int = None,
-    order: str = "DESC"
-) -> dict:
-    """Query sales - builds SQL safely from parameters."""
-    group_map = {
-        "category": "p.category",
-        "year": "EXTRACT(YEAR FROM s.sale_date)",
-        "month": "EXTRACT(MONTH FROM s.sale_date)",
-        "product": "p.name"
+async def execute_query(db, sql: str, chart_type: str) -> dict:
+    """Execute raw SQL from AI - generic approach."""
+    sql_upper = sql.strip().upper()
+    if not sql_upper.startswith("SELECT"):
+        raise ValueError("Only SELECT queries are allowed")
+
+    dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC"]
+    for keyword in dangerous:
+        if keyword in sql_upper:
+            raise ValueError(f"Dangerous keyword '{keyword}' not allowed")
+
+    rows = await db.execute_query(sql)
+
+    return {
+        "chart_type": chart_type,
+        "rows": rows
     }
-    group_col = group_map[group_by]
+
+
+async def list_tables_impl(db) -> dict:
+    """List all tables in database."""
+    sql = """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+    """
+    rows = await db.execute_query(sql)
+    return {"tables": [r["table_name"] for r in rows]}
+
+
+async def describe_table_impl(db, table_name: str) -> dict:
+    """Get table schema."""
+    if not table_name.isalnum():
+        raise ValueError("Invalid table name")
 
     sql = f"""
-        SELECT {group_col} as label, {aggregate}(s.total_amount) as value
-        FROM sales s
-        JOIN products p ON s.product_id = p.id
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = '{table_name}'
+        ORDER BY ordinal_position
     """
-
-    if years:
-        years_str = ", ".join(str(y) for y in years)
-        sql += f" WHERE EXTRACT(YEAR FROM s.sale_date) IN ({years_str})"
-
-    sql += f" GROUP BY {group_col}"
-    sql += f" ORDER BY value {order}"
-
-    if limit:
-        sql += f" LIMIT {limit}"
-
     rows = await db.execute_query(sql)
-
-    return {
-        "chart_type": chart_type,
-        "rows": rows
-    }
+    return {"table": table_name, "columns": rows}
 
 
-async def query_products(
-    db,
-    select: str,
-    chart_type: str,
-    limit: int = None
-) -> dict:
-    """Query products - builds SQL safely from parameters."""
-    if select == "all":
-        sql = "SELECT name as label, price as value FROM products"
-    elif select == "by_category":
-        sql = "SELECT category as label, COUNT(*) as value FROM products GROUP BY category"
-    elif select == "top_selling":
-        sql = """
-            SELECT p.name as label, SUM(s.total_amount) as value
-            FROM products p
-            JOIN sales s ON p.id = s.product_id
-            GROUP BY p.name
-            ORDER BY value DESC
-        """
-
-    if limit:
-        sql += f" LIMIT {limit}"
-
-    rows = await db.execute_query(sql)
-
-    return {
-        "chart_type": chart_type,
-        "rows": rows
-    }
-
-
-async def main():
-    """Run the MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
+# HTTP endpoints for SSE transport
+async def handle_sse(request):
+    """Handle SSE connection from MCP client."""
+    logger.info("New SSE connection")
+    async with sse.connect_sse(
+        request.scope, request.receive, request._send
+    ) as streams:
         await server.run(
-            read_stream,
-            write_stream,
+            streams[0],
+            streams[1],
             server.create_initialization_options()
         )
 
 
+async def handle_messages(request):
+    """Handle POST messages from MCP client."""
+    await sse.handle_post_message(request.scope, request.receive, request._send)
+
+
+async def health(request):
+    """Health check endpoint."""
+    return JSONResponse({"status": "ok", "server": "datatovisual-mcp"})
+
+
+# Starlette app for HTTP server
+app = Starlette(
+    debug=True,
+    routes=[
+        Route("/health", health),
+        Route("/sse", handle_sse),
+        Route("/messages/", handle_messages, methods=["POST"]),
+    ]
+)
+
+
+# For running with uvicorn
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=3001)
