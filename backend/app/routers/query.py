@@ -1,12 +1,13 @@
 """
-Query endpoint using full MCP integration.
-Tools are discovered automatically from MCP server.
+Query endpoint - simple raw SQL approach.
+LLM generates SQL directly, no MCP or function calling.
 """
 import logging
 from fastapi import APIRouter
 
 from app.schemas.query import QueryRequest, QueryResponse
-from app.mcp.client import mcp_client
+from app.services.llm_service import llm_service
+from app.db.database import db
 
 logger = logging.getLogger(__name__)
 
@@ -16,24 +17,24 @@ router = APIRouter(prefix="/api/v1", tags=["query"])
 @router.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
     """
-    Convert natural language question to data visualization.
-
-    Full MCP flow:
-    1. Connect to MCP server
-    2. Discover tools via list_tools()
-    3. AI picks tool and args
-    4. Execute via call_tool()
-    5. Return result
+    Simple flow:
+    1. Send question to LLM
+    2. LLM returns raw SQL + chart_type
+    3. Execute SQL
+    4. Return result
     """
     logger.info(f"Question: {request.question}")
 
-    # Full MCP query - tools discovered automatically
-    result = await mcp_client.query(request.question)
+    # 1. Get SQL from LLM
+    result = llm_service.generate_sql(request.question)
 
-    logger.info(f"Result: chart_type={result['chart_type']}, rows={len(result['rows'])}")
+    # 2. Execute SQL
+    rows = await db.execute_query(result["sql"])
+
+    logger.info(f"Result: chart_type={result['chart_type']}, rows={len(rows)}")
 
     return QueryResponse(
         question=request.question,
         chart_type=result["chart_type"],
-        rows=result["rows"]
+        rows=rows
     )
