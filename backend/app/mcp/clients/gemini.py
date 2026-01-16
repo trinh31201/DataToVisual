@@ -1,4 +1,4 @@
-"""Gemini MCP Client - AI decides which tool to use."""
+"""Gemini MCP Client."""
 import google.generativeai as genai
 
 from app.config import Config
@@ -10,8 +10,8 @@ from app.mcp.clients.base import BaseMCPClient
 class GeminiMCPClient(BaseMCPClient):
     """MCP client using Gemini for AI."""
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, server_url: str = "http://localhost:3001"):
+        super().__init__(server_url)
         if not Config.GEMINI_API_KEY:
             raise AppException(ErrorType.NOT_CONFIGURED, "GEMINI_API_KEY not configured")
         genai.configure(api_key=Config.GEMINI_API_KEY)

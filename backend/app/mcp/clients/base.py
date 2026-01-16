@@ -1,11 +1,10 @@
-"""Base MCP Client - shared logic for all AI providers."""
+"""Base MCP Client."""
 import json
 import logging
-import sys
 from abc import ABC, abstractmethod
 
 from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
+from mcp.client.sse import sse_client
 
 from app.errors import ErrorType
 from app.exceptions import AppException
@@ -14,25 +13,20 @@ logger = logging.getLogger(__name__)
 
 
 class BaseMCPClient(ABC):
-    """Base MCP client with shared logic."""
+    """Base MCP client using SSE transport."""
 
-    def __init__(self):
-        import os
-        self.server_params = StdioServerParameters(
-            command=sys.executable,
-            args=["-m", "app.mcp.server_stdio"],
-            env=dict(os.environ)
-        )
+    def __init__(self, server_url: str = "http://localhost:3001"):
+        self.server_url = server_url
 
     async def query(self, question: str) -> dict:
         """
-        MCP flow:
-        1. Client connects to MCP server
+        MCP flow over HTTP/SSE:
+        1. Client connects to MCP server via SSE
         2. Client gets tools, schema, prompt
         3. AI decides which tool to use
         4. Client executes tool
         """
-        async with stdio_client(self.server_params) as (read, write):
+        async with sse_client(f"{self.server_url}/sse") as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
 

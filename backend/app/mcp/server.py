@@ -208,28 +208,38 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
-# HTTP endpoints for SSE transport
-async def handle_sse(request):
-    """Handle SSE connection from MCP client."""
-    logger.info("New SSE connection")
-    async with sse.connect_sse(
-        request.scope, request.receive, request._send
-    ) as streams:
-        await server.run(
-            streams[0],
-            streams[1],
-            server.create_initialization_options()
-        )
-
-
-async def handle_messages(request):
-    """Handle POST messages from MCP client."""
-    await sse.handle_post_message(request.scope, request.receive, request._send)
-
-
+# Health check endpoint
 async def health(request):
     """Health check endpoint."""
     return JSONResponse({"status": "ok", "server": "datatovisual-mcp"})
+
+
+# ASGI app that handles MCP SSE transport
+async def handle_mcp(scope, receive, send):
+    """Route MCP SSE and message requests."""
+    path = scope.get("path", "")
+
+    if path == "/sse" or path == "/sse/":
+        logger.info("New SSE connection")
+        async with sse.connect_sse(scope, receive, send) as streams:
+            await server.run(
+                streams[0],
+                streams[1],
+                server.create_initialization_options()
+            )
+    elif "/messages" in path:
+        await sse.handle_post_message(scope, receive, send)
+    else:
+        # 404 for unknown paths
+        await send({
+            "type": "http.response.start",
+            "status": 404,
+            "headers": [[b"content-type", b"text/plain"]],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b"Not Found",
+        })
 
 
 # Starlette app for HTTP server
@@ -237,8 +247,7 @@ app = Starlette(
     debug=True,
     routes=[
         Route("/health", health),
-        Route("/sse", handle_sse),
-        Route("/messages/", handle_messages, methods=["POST"]),
+        Mount("/", app=handle_mcp),
     ]
 )
 
