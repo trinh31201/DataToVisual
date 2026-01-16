@@ -1,7 +1,4 @@
-"""
-Query endpoint using full MCP integration.
-Tools are discovered automatically from MCP server.
-"""
+"""Query endpoint - converts natural language to chart data via MCP."""
 import logging
 from fastapi import APIRouter
 
@@ -15,22 +12,15 @@ router = APIRouter(prefix="/api/v1", tags=["query"])
 
 @router.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest):
-    """
-    Convert natural language question to data visualization.
-
-    Full MCP flow:
-    1. Connect to MCP server
-    2. Discover tools via list_tools()
-    3. AI picks tool and args
-    4. Execute via call_tool()
-    5. Return result
-    """
+    """Convert natural language question to chart visualization."""
     logger.info(f"Question: {request.question}")
 
-    # Full MCP query - tools discovered automatically
     result = await mcp_client.query(request.question)
 
-    logger.info(f"Result: {result}")
+    logger.info(f"Result: chart_type={result['chart_type']}, rows={len(result['rows'])}")
 
-    # Return result with question - schema fields are optional
-    return QueryResponse(question=request.question, **result)
+    return QueryResponse(
+        question=request.question,
+        chart_type=result["chart_type"],
+        rows=result["rows"]
+    )

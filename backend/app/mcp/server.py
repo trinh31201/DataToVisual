@@ -58,47 +58,25 @@ PROMPTS = [
 ]
 
 
-# Generic database tools
+# Single tool for data visualization
 TOOLS = [
     Tool(
         name="query",
-        description="Execute a SQL query against the database. Returns rows as JSON.",
+        description="Execute a SQL query and return data for chart visualization.",
         inputSchema={
             "type": "object",
             "properties": {
                 "sql": {
                     "type": "string",
-                    "description": "The SQL query to execute (SELECT only)"
+                    "description": "SELECT query with 'label' and 'value' aliases for chart data"
                 },
                 "chart_type": {
                     "type": "string",
                     "enum": ["bar", "line", "pie"],
-                    "description": "Type of chart to display the results"
+                    "description": "Chart type: bar (comparisons), line (trends), pie (proportions)"
                 }
             },
             "required": ["sql", "chart_type"]
-        }
-    ),
-    Tool(
-        name="list_tables",
-        description="List all tables in the database",
-        inputSchema={
-            "type": "object",
-            "properties": {}
-        }
-    ),
-    Tool(
-        name="describe_table",
-        description="Get schema of a table (columns, types)",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "table_name": {
-                    "type": "string",
-                    "description": "Name of the table to describe"
-                }
-            },
-            "required": ["table_name"]
         }
     )
 ]
@@ -168,16 +146,16 @@ async def get_prompt(name: str, arguments: dict | None = None) -> GetPromptResul
         schema = arguments.get("schema", "") if arguments else ""
         question = arguments.get("question", "") if arguments else ""
 
-        content = f"""You are a data analyst. Answer the user's question using the available tools.
+        content = f"""You are a data analyst. Convert the user's question into a SQL query for visualization.
 
 {schema}
 
 RULES:
-- Only answer questions about the data in this database
-- Reject questions unrelated to data analysis (e.g., "write me a poem", "what's the weather")
-- For the query tool: use column aliases 'label' and 'value' for chart data
-  Example: SELECT category AS label, SUM(amount) AS value FROM ...
-- Choose chart_type based on data: "bar" (comparisons), "line" (trends), "pie" (proportions)
+- Use the query tool to execute SQL and return chart data
+- Always use column aliases 'label' and 'value' in your SELECT
+  Example: SELECT category AS label, SUM(amount) AS value FROM sales GROUP BY category
+- Choose chart_type: "bar" (comparisons), "line" (trends), "pie" (proportions)
+- Reject questions unrelated to data analysis
 
 User question: {question}"""
 
@@ -196,71 +174,38 @@ async def list_tools() -> list[Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """AI calls this to execute a tool."""
+    """Execute the query tool."""
     from app.db.database import db
 
     if not db.pool:
         await db.connect()
 
     try:
-        if name == "query":
-            result = await execute_query(db, **arguments)
-        elif name == "list_tables":
-            result = await list_tables_impl(db)
-        elif name == "describe_table":
-            result = await describe_table_impl(db, **arguments)
-        else:
+        if name != "query":
             raise ValueError(f"Unknown tool: {name}")
 
+        sql = arguments.get("sql", "")
+        chart_type = arguments.get("chart_type", "bar")
+
+        # Validate SQL
+        sql_upper = sql.strip().upper()
+        if not sql_upper.startswith("SELECT"):
+            raise ValueError("Only SELECT queries are allowed")
+
+        dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC"]
+        for keyword in dangerous:
+            if keyword in sql_upper:
+                raise ValueError(f"Dangerous keyword '{keyword}' not allowed")
+
+        # Execute query
+        rows = await db.execute_query(sql)
+
+        result = {"chart_type": chart_type, "rows": rows}
         return [TextContent(type="text", text=json.dumps(result))]
+
     except Exception as e:
         logger.error(f"Tool error: {e}")
         return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-
-
-async def execute_query(db, sql: str, chart_type: str) -> dict:
-    """Execute raw SQL from AI - generic approach."""
-    sql_upper = sql.strip().upper()
-    if not sql_upper.startswith("SELECT"):
-        raise ValueError("Only SELECT queries are allowed")
-
-    dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC"]
-    for keyword in dangerous:
-        if keyword in sql_upper:
-            raise ValueError(f"Dangerous keyword '{keyword}' not allowed")
-
-    rows = await db.execute_query(sql)
-
-    return {
-        "chart_type": chart_type,
-        "rows": rows
-    }
-
-
-async def list_tables_impl(db) -> dict:
-    """List all tables in database."""
-    sql = """
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-    """
-    rows = await db.execute_query(sql)
-    return {"tables": [r["table_name"] for r in rows]}
-
-
-async def describe_table_impl(db, table_name: str) -> dict:
-    """Get table schema."""
-    if not table_name.isalnum():
-        raise ValueError("Invalid table name")
-
-    sql = f"""
-        SELECT column_name, data_type, is_nullable
-        FROM information_schema.columns
-        WHERE table_name = '{table_name}'
-        ORDER BY ordinal_position
-    """
-    rows = await db.execute_query(sql)
-    return {"table": table_name, "columns": rows}
 
 
 # HTTP endpoints for SSE transport
