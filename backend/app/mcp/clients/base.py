@@ -1,4 +1,4 @@
-"""Base MCP Client - agentic multi-turn approach."""
+"""Base MCP Client - shared logic for all AI providers."""
 import json
 import logging
 import sys
@@ -12,64 +12,9 @@ from app.exceptions import AppException
 
 logger = logging.getLogger(__name__)
 
-# Meta-tools for AI to interact with MCP server
-META_TOOLS = [
-    {
-        "name": "mcp_list_resources",
-        "description": "List all available data resources. Call this first to discover what data is available.",
-        "parameters": {"type": "object", "properties": {}}
-    },
-    {
-        "name": "mcp_read_resource",
-        "description": "Read a resource by URI to get its content (e.g., database schema).",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "uri": {"type": "string", "description": "Resource URI (e.g., 'schema://database')"}
-            },
-            "required": ["uri"]
-        }
-    },
-    {
-        "name": "mcp_list_tools",
-        "description": "List all available tools for data operations.",
-        "parameters": {"type": "object", "properties": {}}
-    },
-    {
-        "name": "mcp_call_tool",
-        "description": "Execute a tool with given arguments. Use this to run queries or get table info.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tool_name": {"type": "string", "description": "Name of the tool to call"},
-                "tool_args": {"type": "object", "description": "Arguments for the tool"}
-            },
-            "required": ["tool_name", "tool_args"]
-        }
-    }
-]
-
-SYSTEM_PROMPT = """You are a data analyst assistant. You have access to tools that let you explore and query a database.
-
-WORKFLOW:
-1. First, call mcp_list_resources to discover available resources
-2. Call mcp_read_resource to read the database schema
-3. Call mcp_list_tools to see what data tools are available
-4. Use mcp_call_tool to execute the appropriate tool
-
-RULES:
-- Only answer questions about the data in the database
-- Reject questions unrelated to data analysis
-- For queries, use column aliases 'label' and 'value' for chart data
-- Choose chart_type: "bar" (comparisons), "line" (trends), "pie" (proportions)
-
-When you have the final result, respond with the data."""
-
 
 class BaseMCPClient(ABC):
-    """Base MCP client with agentic multi-turn approach."""
-
-    MAX_TURNS = 10  # Prevent infinite loops
+    """Base MCP client with shared logic."""
 
     def __init__(self):
         import os
@@ -81,132 +26,66 @@ class BaseMCPClient(ABC):
 
     async def query(self, question: str) -> dict:
         """
-        Agentic MCP flow - AI controls everything:
-        1. AI receives question + meta-tools
-        2. AI decides what to explore (resources, tools)
-        3. AI calls tools, gets results, thinks again
-        4. Loop until AI has final answer
+        MCP flow:
+        1. Client connects to MCP server
+        2. Client gets tools, schema, prompt
+        3. AI decides which tool to use
+        4. Client executes tool
         """
         async with stdio_client(self.server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
 
-                # Start conversation with just the question
-                messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": question}
-                ]
+                # Client gets tools from MCP server
+                tools_response = await session.list_tools()
+                tools = tools_response.tools
+                logger.info(f"Discovered {len(tools)} tools")
 
-                # Multi-turn loop
-                for turn in range(self.MAX_TURNS):
-                    logger.info(f"Turn {turn + 1}")
+                # Client gets schema from MCP resource
+                schema_result = await session.read_resource("schema://database")
+                schema = schema_result.contents[0].text
 
-                    try:
-                        response = await self._call_ai_multi_turn(messages, META_TOOLS)
-                    except Exception as e:
-                        error_str = str(e)
-                        if "429" in error_str or "quota" in error_str.lower():
-                            raise AppException(ErrorType.RATE_LIMIT, "Rate limit exceeded")
-                        raise AppException(ErrorType.API_ERROR, error_str)
+                # Client gets prompt from MCP server
+                prompt_result = await session.get_prompt(
+                    "data_analyst",
+                    {"schema": schema, "question": question}
+                )
+                prompt = prompt_result.messages[0].content.text
 
-                    # Check if AI wants to call a tool
-                    if response.get("tool_call"):
-                        tool_call = response["tool_call"]
-                        logger.info(f"AI calls: {tool_call['name']}")
+                # AI decides which tool to use
+                try:
+                    function_call = await self._call_ai(prompt, tools)
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str or "quota" in error_str.lower():
+                        raise AppException(ErrorType.RATE_LIMIT, "Rate limit exceeded")
+                    raise AppException(ErrorType.API_ERROR, error_str)
 
-                        # Execute meta-tool
-                        result = await self._execute_meta_tool(
-                            session, tool_call["name"], tool_call["args"]
-                        )
-                        result_str = json.dumps(result)
-                        logger.info(f"Tool result: {result_str[:200]}..." if len(result_str) > 200 else f"Tool result: {result_str}")
+                logger.info(f"AI chose: {function_call}")
 
-                        # Add assistant's tool call and result to conversation
-                        messages.append({
-                            "role": "assistant",
-                            "content": f"Called {tool_call['name']}"
-                        })
-                        messages.append({
-                            "role": "user",
-                            "content": f"Tool result:\n{json.dumps(result, indent=2)}"
-                        })
-
-                    # Check if AI returned final data
-                    elif response.get("final_result"):
-                        logger.info("AI returned final result")
-                        return response["final_result"]
-
-                    # AI responded with text (might be rejection or clarification)
-                    elif response.get("text"):
-                        text = response["text"]
-                        logger.info(f"AI text response: {text}")
-                        # Treat as rejection/error
-                        raise AppException(ErrorType.INVALID_QUESTION, text)
-
-                # Max turns reached
-                raise AppException(
-                    ErrorType.INTERNAL_ERROR,
-                    "AI could not complete the task within turn limit"
+                # Client executes tool via MCP server
+                result = await session.call_tool(
+                    function_call["name"],
+                    function_call["args"]
                 )
 
-    async def _execute_meta_tool(self, session: ClientSession, name: str, args: dict) -> dict:
-        """Execute a meta-tool that interacts with MCP server."""
+                data = json.loads(result.content[0].text)
 
-        if name == "mcp_list_resources":
-            resources = await session.list_resources()
-            return {
-                "resources": [
-                    {"uri": str(r.uri), "name": r.name, "description": r.description}
-                    for r in resources.resources
-                ]
-            }
+                if "error" in data:
+                    raise AppException(ErrorType.INTERNAL_ERROR, data["error"])
 
-        elif name == "mcp_read_resource":
-            uri = args.get("uri", "")
-            result = await session.read_resource(uri)
-            return {"content": result.contents[0].text}
-
-        elif name == "mcp_list_tools":
-            tools = await session.list_tools()
-            return {
-                "tools": [
-                    {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.inputSchema
-                    }
-                    for t in tools.tools
-                ]
-            }
-
-        elif name == "mcp_call_tool":
-            tool_name = args.get("tool_name", "")
-            tool_args = args.get("tool_args", {})
-
-            result = await session.call_tool(tool_name, tool_args)
-            data = json.loads(result.content[0].text)
-
-            if "error" in data:
-                return {"error": data["error"]}
-
-            return data
-
-        else:
-            return {"error": f"Unknown meta-tool: {name}"}
+                return data
 
     @abstractmethod
-    async def _call_ai_multi_turn(self, messages: list, tools: list) -> dict:
+    async def _call_ai(self, prompt: str, tools: list) -> dict:
         """
-        Call AI with conversation history and tools.
+        AI decides which tool to use.
 
         Args:
-            messages: Conversation history [{"role": "...", "content": "..."}]
-            tools: List of available tools
+            prompt: The prompt with schema and question
+            tools: List of MCP tools
 
         Returns:
-            dict with one of:
-            - {"tool_call": {"name": "...", "args": {...}}}
-            - {"final_result": {...}}
-            - {"text": "..."}
+            dict with "name" and "args" for the chosen tool
         """
         pass
