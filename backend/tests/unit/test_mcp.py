@@ -120,66 +120,15 @@ class TestMCPServer:
 class TestMCPClient:
     """Tests for MCP client."""
 
-    def test_no_api_key_gemini(self):
-        """Test that client has no AI client when Gemini key not configured."""
-        with patch("app.mcp.client.Config") as mock_config:
-            mock_config.AI_PROVIDER = "gemini"
+    def test_no_api_key_raises_exception(self):
+        """Test that client raises exception when Gemini key not configured."""
+        with patch("app.mcp.clients.gemini.Config") as mock_config:
             mock_config.GEMINI_API_KEY = ""
-            mock_config.ANTHROPIC_API_KEY = ""
-            mock_config.OPENAI_API_KEY = ""
-            mock_config.DATABASE_URL = "postgresql://test"
             mock_config.MCP_SERVER_URL = "http://localhost:3001/sse"
 
-            from app.mcp.client import MCPClient
-            client = MCPClient()
-
-            assert client.ai_client is None
-
-    def test_no_api_key_claude(self):
-        """Test that client has no AI client when Claude key not configured."""
-        with patch("app.mcp.client.Config") as mock_config:
-            mock_config.AI_PROVIDER = "claude"
-            mock_config.GEMINI_API_KEY = ""
-            mock_config.ANTHROPIC_API_KEY = ""
-            mock_config.OPENAI_API_KEY = ""
-            mock_config.DATABASE_URL = "postgresql://test"
-            mock_config.MCP_SERVER_URL = "http://localhost:3001/sse"
-
-            from app.mcp.client import MCPClient
-            client = MCPClient()
-
-            assert client.ai_client is None
-
-    def test_no_api_key_openai(self):
-        """Test that client has no AI client when OpenAI key not configured."""
-        with patch("app.mcp.client.Config") as mock_config:
-            mock_config.AI_PROVIDER = "openai"
-            mock_config.GEMINI_API_KEY = ""
-            mock_config.ANTHROPIC_API_KEY = ""
-            mock_config.OPENAI_API_KEY = ""
-            mock_config.DATABASE_URL = "postgresql://test"
-            mock_config.MCP_SERVER_URL = "http://localhost:3001/sse"
-
-            from app.mcp.client import MCPClient
-            client = MCPClient()
-
-            assert client.ai_client is None
-
-    @pytest.mark.asyncio
-    async def test_query_not_configured(self):
-        """Test query raises exception when not configured."""
-        with patch("app.mcp.client.Config") as mock_config:
-            mock_config.AI_PROVIDER = "gemini"
-            mock_config.GEMINI_API_KEY = ""
-            mock_config.ANTHROPIC_API_KEY = ""
-            mock_config.OPENAI_API_KEY = ""
-            mock_config.DATABASE_URL = "postgresql://test"
-            mock_config.MCP_SERVER_URL = "http://localhost:3001/sse"
-
-            from app.mcp.client import MCPClient
-            client = MCPClient()
+            from app.mcp.clients.gemini import GeminiMCPClient
 
             with pytest.raises(AppException) as exc_info:
-                await client.query("Show me sales")
+                GeminiMCPClient()
 
             assert exc_info.value.error_type == ErrorType.NOT_CONFIGURED

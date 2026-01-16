@@ -30,10 +30,7 @@ async def query(request: QueryRequest):
     # Full MCP query - tools discovered automatically
     result = await mcp_client.query(request.question)
 
-    logger.info(f"Result: chart_type={result['chart_type']}, rows={len(result['rows'])}")
+    logger.info(f"Result: {result}")
 
-    return QueryResponse(
-        question=request.question,
-        chart_type=result["chart_type"],
-        rows=result["rows"]
-    )
+    # Return result with question - schema fields are optional
+    return QueryResponse(question=request.question, **result)

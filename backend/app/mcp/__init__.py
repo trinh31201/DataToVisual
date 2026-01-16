@@ -1,4 +1,3 @@
 """MCP (Model Context Protocol) integration for DataToVisual."""
-from app.mcp.client import mcp_client
-
-__all__ = ["mcp_client"]
+# Don't import client here - it requires API keys
+# Import directly where needed: from app.mcp.client import mcp_client

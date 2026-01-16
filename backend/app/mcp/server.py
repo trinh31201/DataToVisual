@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
-from mcp.types import Tool, TextContent, Prompt, PromptMessage, PromptArgument, Resource
+from mcp.types import Tool, TextContent, Prompt, PromptMessage, PromptArgument, Resource, GetPromptResult
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.responses import JSONResponse
@@ -111,9 +111,11 @@ async def list_resources() -> list[Resource]:
 
 
 @server.read_resource()
-async def read_resource(uri: str) -> str:
+async def read_resource(uri) -> str:
     """Read a resource by URI."""
-    if uri == "schema://database":
+    uri_str = str(uri)  # Convert AnyUrl to string
+    logger.info(f"Reading resource: {uri_str}")
+    if uri_str == "schema://database":
         from app.db.database import db
 
         if not db.pool:
@@ -150,7 +152,7 @@ async def read_resource(uri: str) -> str:
 
         return "\n".join(schema_parts)
 
-    raise ValueError(f"Unknown resource: {uri}")
+    raise ValueError(f"Unknown resource: {uri_str}")
 
 
 @server.list_prompts()
@@ -160,27 +162,28 @@ async def list_prompts() -> list[Prompt]:
 
 
 @server.get_prompt()
-async def get_prompt(name: str, arguments: dict | None = None) -> list[PromptMessage]:
+async def get_prompt(name: str, arguments: dict | None = None) -> GetPromptResult:
     """Get a prompt by name with arguments filled in."""
     if name == "data_analyst":
         schema = arguments.get("schema", "") if arguments else ""
         question = arguments.get("question", "") if arguments else ""
 
-        content = f"""You are a data analyst. Write SQL to answer the user's question.
+        content = f"""You are a data analyst. Answer the user's question using the available tools.
 
 {schema}
 
-IMPORTANT:
-- Use the 'query' tool to execute SQL
-- Always SELECT with column aliases 'label' and 'value' for chart data
-- Example: SELECT category AS label, SUM(total_amount) AS value FROM ...
-- Choose appropriate chart_type: bar (comparisons), line (trends), pie (proportions)
+RULES:
+- Only answer questions about the data in this database
+- Reject questions unrelated to data analysis (e.g., "write me a poem", "what's the weather")
+- For the query tool: use column aliases 'label' and 'value' for chart data
+  Example: SELECT category AS label, SUM(amount) AS value FROM ...
+- Choose chart_type based on data: "bar" (comparisons), "line" (trends), "pie" (proportions)
 
-User question: {question}
+User question: {question}"""
 
-Call the 'query' tool with your SQL and chart_type."""
-
-        return [PromptMessage(role="user", content=TextContent(type="text", text=content))]
+        return GetPromptResult(
+            messages=[PromptMessage(role="user", content=TextContent(type="text", text=content))]
+        )
 
     raise ValueError(f"Unknown prompt: {name}")
 

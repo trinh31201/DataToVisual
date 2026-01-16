@@ -38,12 +38,21 @@ class Database:
             await self.pool.close()
 
     async def execute_query(self, sql: str) -> list[dict[str, Any]]:
+        from decimal import Decimal
+
         if not self.pool:
             raise RuntimeError("Database not connected")
 
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(sql)
-            return [dict(row) for row in rows]
+            # Convert Decimal to float for JSON serialization
+            result = []
+            for row in rows:
+                row_dict = {}
+                for key, value in dict(row).items():
+                    row_dict[key] = float(value) if isinstance(value, Decimal) else value
+                result.append(row_dict)
+            return result
 
     async def execute(self, sql: str):
         if not self.pool:
