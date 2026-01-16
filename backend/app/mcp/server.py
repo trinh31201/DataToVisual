@@ -95,16 +95,33 @@ async def read_resource(uri) -> str:
     logger.info(f"Reading resource: {uri_str}")
     if uri_str == "schema://database":
         from app.db.database import db
+        from app.config import Config
 
-        if not db.pool:
+        if not db.engine:
             await db.connect()
 
-        # Get list of tables
-        tables_sql = """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-        """
+        db_type = Config.DATABASE_TYPE
+
+        # Get list of tables (different SQL per database)
+        if db_type == "sqlite":
+            tables_sql = """
+                SELECT name as table_name
+                FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+            """
+        elif db_type == "mysql":
+            tables_sql = """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = DATABASE()
+            """
+        else:
+            # PostgreSQL
+            tables_sql = """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+            """
         tables = await db.execute_query(tables_sql)
 
         # Build schema string
@@ -113,19 +130,43 @@ async def read_resource(uri) -> str:
         for table_row in tables:
             table_name = table_row["table_name"]
 
-            # Get columns for this table
-            columns_sql = f"""
-                SELECT column_name, data_type, is_nullable
-                FROM information_schema.columns
-                WHERE table_name = '{table_name}'
-                ORDER BY ordinal_position
-            """
-            columns = await db.execute_query(columns_sql)
+            # Get columns for this table (different SQL per database)
+            if db_type == "sqlite":
+                columns_sql = f"PRAGMA table_info('{table_name}')"
+                columns = await db.execute_query(columns_sql)
 
-            schema_parts.append(f"Table: {table_name}")
-            for col in columns:
-                nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
-                schema_parts.append(f"  - {col['column_name']}: {col['data_type']} ({nullable})")
+                schema_parts.append(f"Table: {table_name}")
+                for col in columns:
+                    nullable = "NULL" if col["notnull"] == 0 else "NOT NULL"
+                    schema_parts.append(f"  - {col['name']}: {col['type']} ({nullable})")
+            elif db_type == "mysql":
+                columns_sql = f"""
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = '{table_name}' AND table_schema = DATABASE()
+                    ORDER BY ordinal_position
+                """
+                columns = await db.execute_query(columns_sql)
+
+                schema_parts.append(f"Table: {table_name}")
+                for col in columns:
+                    nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
+                    schema_parts.append(f"  - {col['column_name']}: {col['data_type']} ({nullable})")
+            else:
+                # PostgreSQL
+                columns_sql = f"""
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = '{table_name}'
+                    ORDER BY ordinal_position
+                """
+                columns = await db.execute_query(columns_sql)
+
+                schema_parts.append(f"Table: {table_name}")
+                for col in columns:
+                    nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
+                    schema_parts.append(f"  - {col['column_name']}: {col['data_type']} ({nullable})")
+
             schema_parts.append("")
 
         return "\n".join(schema_parts)
@@ -177,7 +218,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Execute the query tool."""
     from app.db.database import db
 
-    if not db.pool:
+    if not db.engine:
         await db.connect()
 
     try:

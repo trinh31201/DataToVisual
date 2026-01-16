@@ -1,7 +1,10 @@
-import asyncpg
+from decimal import Decimal
 from typing import Any
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker, AsyncEngine
 from sqlalchemy.orm import DeclarativeBase
+
 from app.config import Config
 
 
@@ -10,9 +13,20 @@ class Base(DeclarativeBase):
     pass
 
 
+def get_async_url(url: str, db_type: str) -> str:
+    """Convert database URL to async SQLAlchemy format."""
+    if db_type == "postgresql":
+        return url.replace("postgresql://", "postgresql+asyncpg://")
+    elif db_type == "mysql":
+        return url.replace("mysql://", "mysql+aiomysql://")
+    elif db_type == "sqlite":
+        return url.replace("sqlite://", "sqlite+aiosqlite://")
+    return url
+
+
 # Async engine for SQLAlchemy
 engine = create_async_engine(
-    Config.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://"),
+    get_async_url(Config.DATABASE_URL, Config.DATABASE_TYPE),
     echo=False
 )
 
@@ -27,39 +41,49 @@ async def get_session() -> AsyncSession:
 
 # Raw SQL Database class (for LLM-generated queries)
 class Database:
+    """Database class that works with any SQLAlchemy-supported database."""
+
     def __init__(self):
-        self.pool: asyncpg.Pool | None = None
+        self.engine: AsyncEngine | None = None
+        self.db_type = Config.DATABASE_TYPE
 
     async def connect(self):
-        self.pool = await asyncpg.create_pool(Config.DATABASE_URL)
+        """Create database engine."""
+        self.engine = create_async_engine(
+            get_async_url(Config.DATABASE_URL, self.db_type),
+            echo=False
+        )
 
     async def disconnect(self):
-        if self.pool:
-            await self.pool.close()
+        """Close database engine."""
+        if self.engine:
+            await self.engine.dispose()
 
     async def execute_query(self, sql: str) -> list[dict[str, Any]]:
-        from decimal import Decimal
+        """Execute a SELECT query and return results as list of dicts."""
+        if not self.engine:
+            await self.connect()
 
-        if not self.pool:
-            raise RuntimeError("Database not connected")
+        async with self.engine.connect() as conn:
+            result = await conn.execute(text(sql))
+            rows = result.fetchall()
 
-        async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql)
-            # Convert Decimal to float for JSON serialization
-            result = []
+            # Convert to list of dicts with Decimal handling
+            output = []
             for row in rows:
                 row_dict = {}
-                for key, value in dict(row).items():
+                for key, value in row._mapping.items():
                     row_dict[key] = float(value) if isinstance(value, Decimal) else value
-                result.append(row_dict)
-            return result
+                output.append(row_dict)
+            return output
 
     async def execute(self, sql: str):
-        if not self.pool:
-            raise RuntimeError("Database not connected")
+        """Execute a non-SELECT query (INSERT, UPDATE, etc.)."""
+        if not self.engine:
+            await self.connect()
 
-        async with self.pool.acquire() as conn:
-            await conn.execute(sql)
+        async with self.engine.begin() as conn:
+            await conn.execute(text(sql))
 
 
 db = Database()

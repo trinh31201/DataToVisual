@@ -3,11 +3,12 @@ import os
 
 class Config:
     # Database
+    # Supported types: "postgresql", "mysql", "sqlite"
+    DATABASE_TYPE = os.getenv("DATABASE_TYPE", "postgresql")
     DATABASE_URL = os.getenv(
         "DATABASE_URL",
         "postgresql://datatovisual:datatovisual123@localhost:5432/datatovisual"
     )
-    DATABASE_TYPE = os.getenv("DATABASE_TYPE", "PostgreSQL")
 
     # AI Provider: "gemini", "claude", or "openai"
     AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini")
