@@ -4,15 +4,26 @@ A data-to-visualization system where users can ask business questions in plain E
 
 ## Architecture
 
-![Architecture](docs/architecture.png)
+Built with **MCP (Model Context Protocol)** for AI-database interaction:
 
-![Sequence Diagram](docs/sequence_diagram.png)
+```
+┌──────────┐     ┌─────────┐     ┌────────────┐     ┌──────────┐
+│ Frontend │────▶│ Backend │────▶│ MCP Server │────▶│ Database │
+│ Chart.js │     │ FastAPI │ SSE │  (Tools)   │     │ SQL      │
+└──────────┘     └─────────┘     └────────────┘     └──────────┘
+                      │
+                      ▼
+                ┌───────────┐
+                │ Gemini AI │
+                └───────────┘
+```
 
 ## Tech Stack
 
 - **Backend**: Python + FastAPI
-- **Database**: PostgreSQL
-- **LLM**: Google Gemini API
+- **MCP Server**: Model Context Protocol with SSE transport
+- **Database**: PostgreSQL, MySQL, or SQLite (via SQLAlchemy)
+- **LLM**: Google Gemini API (Claude/OpenAI ready)
 - **Frontend**: HTML/CSS/JS + Chart.js
 - **Containerization**: Docker
 
@@ -40,6 +51,11 @@ cp .env.example .env
 docker-compose up -d
 ```
 
+This starts 3 services:
+- `postgres` - Database (port 5432)
+- `mcp-server` - MCP Server (port 3001)
+- `backend` - FastAPI (port 8000)
+
 ### 3. Seed the database
 
 ```bash
@@ -48,13 +64,16 @@ docker exec datatovisual_backend python -m app.db.seed
 
 ### 4. Open the frontend
 
-Open `frontend/index.html` in your browser, or serve it:
-
 ```bash
 cd frontend
-python -m http.server 3000
-# Then open http://localhost:3000
+python -m http.server 5500
 ```
+
+Open **http://localhost:5500**
+
+### API Documentation
+
+Swagger UI available at **http://localhost:8000/docs**
 
 ## Example Queries
 
@@ -74,24 +93,41 @@ Base URL: `http://localhost:8000/api/v1`
 
 ```json
 // Request
-{ "question": "Compare total sales in 2026 vs 2022" }
+{ "question": "Show total sales by category" }
 
 // Response
 {
-  "success": true,
-  "question": "Compare total sales in 2026 vs 2022",
-  "sql": "SELECT EXTRACT(YEAR FROM sale_date) as year, SUM(total_amount) as total FROM sales WHERE EXTRACT(YEAR FROM sale_date) IN (2022, 2026) GROUP BY year",
+  "question": "Show total sales by category",
   "chart_type": "bar",
-  "data": {
-    "labels": ["2022", "2026"],
-    "datasets": [{ "label": "Total", "data": [125000, 189000] }]
-  }
+  "rows": [
+    { "label": "Electronics", "value": 17059236.4 },
+    { "label": "Home", "value": 3001309.34 },
+    { "label": "Clothing", "value": 1214876.23 },
+    { "label": "Food", "value": 241178.16 }
+  ]
 }
 ```
 
-### GET /api/v1/health
+## Switching Databases
 
-Returns `{"status": "ok"}` if the server is running.
+Supports PostgreSQL, MySQL, and SQLite via SQLAlchemy.
+
+| Database | DATABASE_TYPE | DATABASE_URL | Driver |
+|----------|---------------|--------------|--------|
+| PostgreSQL | `postgresql` | `postgresql://user:pass@host/db` | `asyncpg` |
+| MySQL | `mysql` | `mysql://user:pass@host/db` | `aiomysql` |
+| SQLite | `sqlite` | `sqlite:///path/to/file.db` | `aiosqlite` |
+
+To switch, update `.env`:
+```bash
+DATABASE_TYPE=mysql
+DATABASE_URL=mysql://user:pass@localhost/mydb
+```
+
+And install the driver:
+```bash
+pip install aiomysql  # for MySQL
+```
 
 ## Project Structure
 
@@ -101,17 +137,18 @@ DataToVisual/
 ├── .env.example
 ├── backend/
 │   ├── app/
-│   │   ├── main.py           # FastAPI entry point
-│   │   ├── config.py         # Environment config
+│   │   ├── main.py              # FastAPI entry point
+│   │   ├── config.py            # Environment config
 │   │   ├── routers/
-│   │   │   └── query.py      # API endpoints
-│   │   ├── schemas/
-│   │   │   └── query.py      # Pydantic models
-│   │   ├── services/
-│   │   │   └── llm_service.py # Gemini API integration
+│   │   │   └── query.py         # API endpoints
+│   │   ├── mcp/
+│   │   │   ├── server.py        # MCP Server (tools, resources, prompts)
+│   │   │   └── clients/
+│   │   │       ├── base.py      # Base MCP client (SSE transport)
+│   │   │       └── gemini.py    # Gemini AI integration
 │   │   └── db/
-│   │       ├── database.py   # PostgreSQL connection
-│   │       └── seed.py       # Sample data
+│   │       ├── database.py      # SQLAlchemy (multi-DB support)
+│   │       └── seed.py          # Sample data
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/
@@ -119,8 +156,6 @@ DataToVisual/
 │   ├── style.css
 │   └── app.js
 └── docs/
-    ├── architecture.png
-    └── sequence_diagram.png
 ```
 
 ## Database Schema

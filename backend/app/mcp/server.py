@@ -58,17 +58,71 @@ PROMPTS = [
 ]
 
 
-# Single tool for data visualization
+# Two tools: simple (structured) and advanced (raw SQL)
 TOOLS = [
     Tool(
-        name="query",
-        description="Execute a SQL query and return data for chart visualization.",
+        name="simple_query",
+        description="Simple query for single-table aggregations. Use this for most queries.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "table": {
+                    "type": "string",
+                    "description": "Table to query (e.g., 'sales', 'products')"
+                },
+                "label_column": {
+                    "type": "string",
+                    "description": "Column for chart labels/X-axis (e.g., 'category', 'sale_date')"
+                },
+                "value_column": {
+                    "type": "string",
+                    "description": "Column for chart values/Y-axis (e.g., 'total_amount', 'quantity')"
+                },
+                "aggregation": {
+                    "type": "string",
+                    "enum": ["SUM", "COUNT", "AVG", "MAX", "MIN", "NONE"],
+                    "description": "Aggregation function. Use NONE for non-aggregated data."
+                },
+                "filters": {
+                    "type": "array",
+                    "description": "Optional WHERE conditions",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "column": {"type": "string"},
+                            "operator": {"type": "string", "enum": ["=", ">", "<", ">=", "<=", "LIKE", "IN"]},
+                            "value": {"type": "string"}
+                        },
+                        "required": ["column", "operator", "value"]
+                    }
+                },
+                "order_by": {
+                    "type": "string",
+                    "enum": ["label_asc", "label_desc", "value_asc", "value_desc"],
+                    "description": "Sort order"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max rows to return"
+                },
+                "chart_type": {
+                    "type": "string",
+                    "enum": ["bar", "line", "pie"],
+                    "description": "Chart type: bar (comparisons), line (trends), pie (proportions)"
+                }
+            },
+            "required": ["table", "label_column", "value_column", "aggregation", "chart_type"]
+        }
+    ),
+    Tool(
+        name="advanced_query",
+        description="Advanced query for JOINs, subqueries, or complex logic. Only use when simple_query cannot handle the request.",
         inputSchema={
             "type": "object",
             "properties": {
                 "sql": {
                     "type": "string",
-                    "description": "SELECT query with 'label' and 'value' aliases for chart data"
+                    "description": "SELECT query with 'label' and 'value' aliases. Can include JOINs and subqueries."
                 },
                 "chart_type": {
                     "type": "string",
@@ -187,15 +241,14 @@ async def get_prompt(name: str, arguments: dict | None = None) -> GetPromptResul
         schema = arguments.get("schema", "") if arguments else ""
         question = arguments.get("question", "") if arguments else ""
 
-        content = f"""You are a data analyst. Convert the user's question into a SQL query for visualization.
+        content = f"""You are a data analyst. Convert the user's question into a query for visualization.
 
 {schema}
 
 RULES:
-- Use the query tool to execute SQL and return chart data
-- Always use column aliases 'label' and 'value' in your SELECT
-  Example: SELECT category AS label, SUM(amount) AS value FROM sales GROUP BY category
-- Choose chart_type: "bar" (comparisons), "line" (trends), "pie" (proportions)
+- Prefer simple_query for single-table queries
+- Use advanced_query only for JOINs or complex SQL
+- chart_type: bar (comparisons), line (trends), pie (proportions)
 - Reject questions unrelated to data analysis
 
 User question: {question}"""
@@ -213,33 +266,141 @@ async def list_tools() -> list[Tool]:
     return TOOLS
 
 
+MAX_ROWS = 1000
+QUERY_TIMEOUT = 30  # seconds
+
+# Valid tables and columns (populated from schema)
+VALID_TABLES = ["sales", "products", "features"]
+VALID_COLUMNS = {
+    "sales": ["id", "product_id", "quantity", "total_amount", "sale_date", "created_at"],
+    "products": ["id", "name", "category", "price", "created_at"],
+    "features": ["id", "product_id", "name", "description", "created_at"],
+}
+
+
+def build_sql_from_structure(args: dict) -> str:
+    """Build SQL from structured arguments. Validates and returns safe SQL."""
+    table = args["table"]
+    label_col = args["label_column"]
+    value_col = args["value_column"]
+    agg = args.get("aggregation", "NONE")
+    filters = args.get("filters", [])
+    order_by = args.get("order_by")
+    limit = args.get("limit", MAX_ROWS)
+
+    # Validate table
+    if table not in VALID_TABLES:
+        raise ValueError(f"Invalid table '{table}'. Valid: {VALID_TABLES}")
+
+    # Build SELECT clause
+    if agg != "NONE":
+        select = f"{label_col} AS label, {agg}({value_col}) AS value"
+    else:
+        select = f"{label_col} AS label, {value_col} AS value"
+
+    sql = f"SELECT {select} FROM {table}"
+
+    # Build WHERE clause
+    if filters:
+        conditions = []
+        for f in filters:
+            col = f["column"]
+            op = f["operator"]
+            val = f["value"]
+            # Escape single quotes in value
+            val_escaped = val.replace("'", "''")
+            if op == "IN":
+                conditions.append(f"{col} IN ({val_escaped})")
+            else:
+                conditions.append(f"{col} {op} '{val_escaped}'")
+        sql += f" WHERE {' AND '.join(conditions)}"
+
+    # Add GROUP BY if aggregating
+    if agg != "NONE":
+        sql += f" GROUP BY {label_col}"
+
+    # Add ORDER BY
+    if order_by:
+        order_map = {
+            "label_asc": "label ASC",
+            "label_desc": "label DESC",
+            "value_asc": "value ASC",
+            "value_desc": "value DESC"
+        }
+        sql += f" ORDER BY {order_map.get(order_by, 'value DESC')}"
+
+    # Add LIMIT
+    sql += f" LIMIT {min(limit, MAX_ROWS)}"
+
+    return sql
+
+
+def validate_raw_sql(sql: str) -> str:
+    """Validate raw SQL for advanced_query. Returns sanitized SQL or raises ValueError."""
+    sql = sql.strip().rstrip(";")  # Remove trailing semicolon
+    sql_upper = sql.upper()
+
+    # Must be SELECT
+    if not sql_upper.startswith("SELECT"):
+        raise ValueError("Only SELECT queries are allowed")
+
+    # Block dangerous keywords
+    dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC", "GRANT", "REVOKE"]
+    for keyword in dangerous:
+        if keyword in sql_upper:
+            raise ValueError(f"Dangerous keyword '{keyword}' not allowed")
+
+    # Block SQL injection patterns
+    injection_patterns = [
+        ";",           # Multiple statements (after stripping trailing)
+        "--",          # SQL comments
+        "/*",          # Block comments
+        "INTO OUTFILE", # File writes
+        "LOAD_FILE",   # File reads
+    ]
+    for pattern in injection_patterns:
+        if pattern in sql_upper:
+            raise ValueError(f"SQL pattern '{pattern}' not allowed")
+
+    # Add row limit if not present
+    if "LIMIT" not in sql_upper:
+        sql = f"{sql} LIMIT {MAX_ROWS}"
+
+    return sql
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Execute the query tool."""
+    """Execute query tools."""
+    import asyncio
     from app.db.database import db
 
     if not db.engine:
         await db.connect()
 
     try:
-        if name != "query":
+        # Build SQL based on tool type
+        if name == "simple_query":
+            sql = build_sql_from_structure(arguments)
+            chart_type = arguments.get("chart_type", "bar")
+            logger.info(f"simple_query built SQL: {sql}")
+
+        elif name == "advanced_query":
+            sql = validate_raw_sql(arguments.get("sql", ""))
+            chart_type = arguments.get("chart_type", "bar")
+            logger.info(f"advanced_query SQL: {sql}")
+
+        else:
             raise ValueError(f"Unknown tool: {name}")
 
-        sql = arguments.get("sql", "")
-        chart_type = arguments.get("chart_type", "bar")
-
-        # Validate SQL
-        sql_upper = sql.strip().upper()
-        if not sql_upper.startswith("SELECT"):
-            raise ValueError("Only SELECT queries are allowed")
-
-        dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC"]
-        for keyword in dangerous:
-            if keyword in sql_upper:
-                raise ValueError(f"Dangerous keyword '{keyword}' not allowed")
-
-        # Execute query
-        rows = await db.execute_query(sql)
+        # Execute query with timeout
+        try:
+            rows = await asyncio.wait_for(
+                db.execute_query(sql),
+                timeout=QUERY_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            raise ValueError(f"Query timed out after {QUERY_TIMEOUT} seconds")
 
         result = {"chart_type": chart_type, "rows": rows}
         return [TextContent(type="text", text=json.dumps(result))]
