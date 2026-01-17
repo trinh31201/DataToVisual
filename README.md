@@ -1,10 +1,8 @@
 # DataToVisual
 
-A data-to-visualization system where users can ask business questions in plain English and instantly see the answer as a chart.
+A data-to-visualization system where users ask business questions in plain English and instantly see the answer as a chart.
 
 ## Architecture
-
-Built with **MCP (Model Context Protocol)** for AI-database interaction:
 
 ```
 ┌──────────┐     ┌─────────┐     ┌────────────┐     ┌──────────┐
@@ -18,14 +16,97 @@ Built with **MCP (Model Context Protocol)** for AI-database interaction:
                 └───────────┘
 ```
 
+### Why MCP (Model Context Protocol)?
+
+**Decision:** Use MCP instead of direct LLM API calls.
+
+**Reasoning:**
+- **Standardized interface** - MCP provides a standard way for AI to interact with tools, resources, and prompts
+- **Separation of concerns** - AI logic (tool selection) is separate from execution (database queries)
+- **Extensibility** - Easy to add new tools without changing AI integration code
+- **Interoperability** - MCP server can be used by other AI clients (Claude Desktop, Cursor, etc.)
+
+### Why HTTP/SSE Transport (not Stdio)?
+
+**Decision:** Use HTTP/SSE transport instead of stdio.
+
+**Reasoning:**
+- **Docker-friendly** - Each service runs in its own container
+- **Scalability** - MCP server can be scaled independently
+- **Debugging** - Easier to inspect HTTP traffic than stdio pipes
+- **Production-ready** - HTTP is standard for microservices
+
 ## Tech Stack
 
-- **Backend**: Python + FastAPI
-- **MCP Server**: Model Context Protocol with SSE transport
-- **Database**: PostgreSQL, MySQL, or SQLite (via SQLAlchemy)
-- **LLM**: Google Gemini API (Claude/OpenAI ready)
-- **Frontend**: HTML/CSS/JS + Chart.js
-- **Containerization**: Docker
+| Component | Technology | Why |
+|-----------|------------|-----|
+| Backend | FastAPI | Async, fast, auto-docs |
+| MCP Server | Starlette + SSE | Lightweight, async |
+| Database | SQLAlchemy | Multi-DB support |
+| AI | Gemini API | Free tier, function calling |
+| Frontend | Chart.js | Simple, no build step |
+| Container | Docker Compose | Easy deployment |
+
+## Design Decisions
+
+### 1. Hybrid Query Tools (simple_query + advanced_query)
+
+**Problem:** AI-generated raw SQL can have syntax errors or security issues.
+
+**Solution:** Two-tool approach:
+
+| Tool | Use Case | Safety |
+|------|----------|--------|
+| `simple_query` | Single-table aggregations | SQL built from validated structure |
+| `advanced_query` | JOINs, complex queries | Raw SQL with sanitization |
+
+**Why hybrid?**
+- `simple_query` handles 80% of cases safely (no SQL injection possible)
+- `advanced_query` provides flexibility for complex queries
+- AI chooses the appropriate tool based on query complexity
+
+### 2. Multi-Database Support via SQLAlchemy
+
+**Problem:** Locked to PostgreSQL initially.
+
+**Solution:** Use SQLAlchemy's `text()` for raw queries instead of database-specific drivers.
+
+```python
+# Works with any database
+result = await conn.execute(text(sql))
+```
+
+**Trade-off:** Slight overhead, but gains database portability.
+
+### 3. SQL Safety Layers
+
+| Layer | Protection |
+|-------|------------|
+| Keyword blocking | DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE |
+| Pattern blocking | `;` (multi-statement), `--` (comments), `UNION` |
+| Row limit | Auto-adds `LIMIT 1000` |
+| Timeout | 30-second query timeout |
+| Table whitelist | Only allowed tables in `simple_query` |
+
+**Why not just trust the AI?**
+- AI can be manipulated via prompt injection
+- Defense in depth is essential for database access
+
+### 4. Schema Discovery via MCP Resource
+
+**Decision:** Fetch schema dynamically, not hardcoded.
+
+```python
+@server.read_resource()
+async def read_resource(uri):
+    if uri == "schema://database":
+        # Query information_schema dynamically
+```
+
+**Why?**
+- Schema changes don't require code updates
+- Works with any database structure
+- AI always has current schema
 
 ## Setup
 
@@ -34,60 +115,43 @@ Built with **MCP (Model Context Protocol)** for AI-database interaction:
 - Docker & Docker Compose
 - Gemini API key ([Get one free](https://aistudio.google.com/))
 
-### 1. Clone and configure
+### Quick Start
 
 ```bash
+# Clone
 git clone <repo-url>
 cd DataToVisual
 
-# Create .env file
+# Configure
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
-```
+# Add your GEMINI_API_KEY to .env
 
-### 2. Start the services
-
-```bash
+# Start
 docker-compose up -d
-```
 
-This starts 3 services:
-- `postgres` - Database (port 5432)
-- `mcp-server` - MCP Server (port 3001)
-- `backend` - FastAPI (port 8000)
-
-### 3. Seed the database
-
-```bash
+# Seed database
 docker exec datatovisual_backend python -m app.db.seed
+
+# Open frontend
+cd frontend && python -m http.server 5500
 ```
 
-### 4. Open the frontend
-
-```bash
-cd frontend
-python -m http.server 5500
-```
-
-Open **http://localhost:5500**
-
-### API Documentation
-
-Swagger UI available at **http://localhost:8000/docs**
+**URLs:**
+- Frontend: http://localhost:5500
+- API: http://localhost:8000
+- API Docs: http://localhost:8000/docs
+- MCP Server: http://localhost:3001
 
 ## Example Queries
 
-| Question | Chart Type |
-|----------|------------|
-| "Compare total sales in 2026 vs 2022" | Bar |
-| "How are our sales trending over the last 5 years?" | Line |
-| "What are our top 5 selling products?" | Bar |
-| "Show sales by product category" | Pie |
-| "Monthly sales for 2025" | Line |
+| Question | Tool Used | Chart |
+|----------|-----------|-------|
+| "Sales by category" | advanced_query (JOIN) | Bar |
+| "Top 5 products by quantity" | advanced_query (JOIN) | Bar |
+| "Monthly sales trend" | advanced_query (EXTRACT) | Line |
+| "Count products per category" | simple_query | Pie |
 
-## API Endpoints
-
-Base URL: `http://localhost:8000/api/v1`
+## API
 
 ### POST /api/v1/query
 
@@ -101,16 +165,12 @@ Base URL: `http://localhost:8000/api/v1`
   "chart_type": "bar",
   "rows": [
     { "label": "Electronics", "value": 17059236.4 },
-    { "label": "Home", "value": 3001309.34 },
-    { "label": "Clothing", "value": 1214876.23 },
-    { "label": "Food", "value": 241178.16 }
+    { "label": "Home", "value": 3001309.34 }
   ]
 }
 ```
 
 ## Switching Databases
-
-Supports PostgreSQL, MySQL, and SQLite via SQLAlchemy.
 
 | Database | DATABASE_TYPE | DATABASE_URL | Driver |
 |----------|---------------|--------------|--------|
@@ -118,52 +178,85 @@ Supports PostgreSQL, MySQL, and SQLite via SQLAlchemy.
 | MySQL | `mysql` | `mysql://user:pass@host/db` | `aiomysql` |
 | SQLite | `sqlite` | `sqlite:///path/to/file.db` | `aiosqlite` |
 
-To switch, update `.env`:
 ```bash
+# .env
 DATABASE_TYPE=mysql
 DATABASE_URL=mysql://user:pass@localhost/mydb
-```
 
-And install the driver:
-```bash
-pip install aiomysql  # for MySQL
+# Install driver
+pip install aiomysql
 ```
 
 ## Project Structure
 
 ```
 DataToVisual/
-├── docker-compose.yml
-├── .env.example
+├── docker-compose.yml          # 3 services: postgres, mcp-server, backend
 ├── backend/
 │   ├── app/
-│   │   ├── main.py              # FastAPI entry point
-│   │   ├── config.py            # Environment config
-│   │   ├── routers/
-│   │   │   └── query.py         # API endpoints
+│   │   ├── main.py             # FastAPI app
+│   │   ├── config.py           # Environment config
+│   │   ├── routers/query.py    # POST /api/v1/query
 │   │   ├── mcp/
-│   │   │   ├── server.py        # MCP Server (tools, resources, prompts)
+│   │   │   ├── server.py       # MCP Server (tools, resources, prompts)
 │   │   │   └── clients/
-│   │   │       ├── base.py      # Base MCP client (SSE transport)
-│   │   │       └── gemini.py    # Gemini AI integration
+│   │   │       ├── base.py     # MCP client (SSE transport)
+│   │   │       └── gemini.py   # Gemini function calling
 │   │   └── db/
-│   │       ├── database.py      # SQLAlchemy (multi-DB support)
-│   │       └── seed.py          # Sample data
-│   ├── Dockerfile
+│   │       └── database.py     # SQLAlchemy multi-DB
 │   └── requirements.txt
-├── frontend/
-│   ├── index.html
-│   ├── style.css
-│   └── app.js
-└── docs/
+└── frontend/
+    ├── index.html
+    ├── style.css
+    └── app.js
+```
+
+## MCP Tools Reference
+
+### simple_query
+
+Structured query builder for single-table operations.
+
+```json
+{
+  "table": "sales",
+  "label_column": "product_id",
+  "value_column": "total_amount",
+  "aggregation": "SUM",
+  "filters": [{"column": "sale_date", "operator": ">=", "value": "2024-01-01"}],
+  "order_by": "value_desc",
+  "limit": 10,
+  "chart_type": "bar"
+}
+```
+
+### advanced_query
+
+Raw SQL for complex queries (JOINs, subqueries).
+
+```json
+{
+  "sql": "SELECT p.category AS label, SUM(s.total_amount) AS value FROM sales s JOIN products p ON s.product_id = p.id GROUP BY p.category",
+  "chart_type": "bar"
+}
 ```
 
 ## Database Schema
 
-![Database Schema](docs/database-schema.png)
+```
+products (id, name, category, price, created_at)
+    │
+    ├── features (id, product_id, name, description)
+    │
+    └── sales (id, product_id, quantity, total_amount, sale_date)
+```
 
-- **products**: id, name, category, price, created_at
-- **features**: id, product_id, name, description (FK → products)
-- **sales**: id, product_id, quantity, total_amount, sale_date (FK → products)
+Sales data: 2022-2026 with realistic trends.
 
-Sales data spans 2022-2026 with realistic growth trends.
+## Future Improvements
+
+- [ ] Add more AI providers (Claude, OpenAI)
+- [ ] Frontend in Docker
+- [ ] Caching for repeated queries
+- [ ] User authentication
+- [ ] Query history
