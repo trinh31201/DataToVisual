@@ -145,85 +145,33 @@ async def list_resources() -> list[Resource]:
 @server.read_resource()
 async def read_resource(uri) -> str:
     """Read a resource by URI."""
+    from sqlalchemy import inspect
+
     uri_str = str(uri)  # Convert AnyUrl to string
     logger.info(f"Reading resource: {uri_str}")
     if uri_str == "schema://database":
         from app.db.database import db
-        from app.config import Config
 
         if not db.engine:
             await db.connect()
 
-        db_type = Config.DATABASE_TYPE
+        # Use SQLAlchemy Inspector - works for all databases
+        async with db.engine.connect() as conn:
+            def get_schema(sync_conn):
+                inspector = inspect(sync_conn)
+                schema_parts = ["DATABASE SCHEMA:", ""]
 
-        # Get list of tables (different SQL per database)
-        if db_type == "sqlite":
-            tables_sql = """
-                SELECT name as table_name
-                FROM sqlite_master
-                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-            """
-        elif db_type == "mysql":
-            tables_sql = """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = DATABASE()
-            """
-        else:
-            # PostgreSQL
-            tables_sql = """
-                SELECT table_name
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-            """
-        tables = await db.execute_query(tables_sql)
+                for table_name in inspector.get_table_names():
+                    schema_parts.append(f"Table: {table_name}")
+                    for col in inspector.get_columns(table_name):
+                        nullable = "NULL" if col["nullable"] else "NOT NULL"
+                        col_type = str(col["type"])
+                        schema_parts.append(f"  - {col['name']}: {col_type} ({nullable})")
+                    schema_parts.append("")
 
-        # Build schema string
-        schema_parts = ["DATABASE SCHEMA:", ""]
+                return "\n".join(schema_parts)
 
-        for table_row in tables:
-            table_name = table_row["table_name"]
-
-            # Get columns for this table (different SQL per database)
-            if db_type == "sqlite":
-                columns_sql = f"PRAGMA table_info('{table_name}')"
-                columns = await db.execute_query(columns_sql)
-
-                schema_parts.append(f"Table: {table_name}")
-                for col in columns:
-                    nullable = "NULL" if col["notnull"] == 0 else "NOT NULL"
-                    schema_parts.append(f"  - {col['name']}: {col['type']} ({nullable})")
-            elif db_type == "mysql":
-                columns_sql = f"""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = '{table_name}' AND table_schema = DATABASE()
-                    ORDER BY ordinal_position
-                """
-                columns = await db.execute_query(columns_sql)
-
-                schema_parts.append(f"Table: {table_name}")
-                for col in columns:
-                    nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
-                    schema_parts.append(f"  - {col['column_name']}: {col['data_type']} ({nullable})")
-            else:
-                # PostgreSQL
-                columns_sql = f"""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = '{table_name}'
-                    ORDER BY ordinal_position
-                """
-                columns = await db.execute_query(columns_sql)
-
-                schema_parts.append(f"Table: {table_name}")
-                for col in columns:
-                    nullable = "NULL" if col["is_nullable"] == "YES" else "NOT NULL"
-                    schema_parts.append(f"  - {col['column_name']}: {col['data_type']} ({nullable})")
-
-            schema_parts.append("")
-
-        return "\n".join(schema_parts)
+            return await conn.run_sync(get_schema)
 
     raise ValueError(f"Unknown resource: {uri_str}")
 
@@ -241,14 +189,14 @@ async def get_prompt(name: str, arguments: dict | None = None) -> GetPromptResul
         schema = arguments.get("schema", "") if arguments else ""
         question = arguments.get("question", "") if arguments else ""
 
-        content = f"""You are a data analyst. Convert the user's question into a query for visualization.
+        content = f"""You are a data analyst. Convert the user's question into a database query for visualization.
 
 {schema}
 
 RULES:
-- Prefer simple_query for single-table queries
-- Use advanced_query only for JOINs or complex SQL
-- chart_type: bar (comparisons), line (trends), pie (proportions)
+- Use bar chart for comparisons
+- Use line chart for trends over time
+- Use pie chart for proportions
 - Reject questions unrelated to data analysis
 
 User question: {question}"""
