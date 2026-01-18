@@ -59,13 +59,21 @@ class Database:
         if self.engine:
             await self.engine.dispose()
 
-    async def execute_query(self, sql: str) -> list[dict[str, Any]]:
-        """Execute a SELECT query and return results as list of dicts."""
+    async def execute_query(self, sql: str, params: dict | None = None) -> list[dict[str, Any]]:
+        """Execute a SELECT query and return results as list of dicts.
+
+        Args:
+            sql: SQL query (can use :param_name for parameterized queries)
+            params: Optional dict of parameter values
+        """
         if not self.engine:
             await self.connect()
 
         async with self.engine.connect() as conn:
-            result = await conn.execute(text(sql))
+            if params:
+                result = await conn.execute(text(sql), params)
+            else:
+                result = await conn.execute(text(sql))
             rows = result.fetchall()
 
             # Convert to list of dicts with Decimal handling
@@ -87,34 +95,3 @@ class Database:
 
 
 db = Database()
-
-
-SCHEMA_DESCRIPTION = """
-Database Schema:
-
-TABLE products:
-- id (INT, PRIMARY KEY): Unique product identifier
-- name (VARCHAR): Product name
-- category (VARCHAR): Product category ('Electronics', 'Clothing', 'Food', 'Home')
-- price (DECIMAL): Unit price
-- created_at (TIMESTAMP): When product was added
-
-TABLE features:
-- id (INT, PRIMARY KEY): Unique feature identifier
-- product_id (INT, FK -> products.id): Reference to product
-- name (VARCHAR): Feature name
-- description (TEXT): Feature description
-- created_at (TIMESTAMP): When feature was added
-
-TABLE sales:
-- id (INT, PRIMARY KEY): Unique sale identifier
-- product_id (INT, FK -> products.id): Reference to product sold
-- quantity (INT): Number of units sold
-- total_amount (DECIMAL): Total sale amount
-- sale_date (DATE): Date of sale (2022-2026)
-- created_at (TIMESTAMP): When sale was recorded
-
-RELATIONSHIPS:
-- products 1:N features
-- products 1:N sales
-"""

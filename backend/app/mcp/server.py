@@ -6,6 +6,8 @@ import json
 import sys
 import os
 import logging
+from datetime import date, datetime
+from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -16,6 +18,12 @@ from starlette.applications import Starlette
 from starlette.routing import Route, Mount
 from starlette.responses import JSONResponse
 
+from .sql_builder import (
+    build_sql_from_structure,
+    validate_raw_sql,
+    get_valid_tables,
+)
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -24,6 +32,9 @@ server = Server("datatovisual")
 
 # SSE transport for HTTP
 sse = SseServerTransport("/messages/")
+
+# Query timeout
+QUERY_TIMEOUT = 30  # seconds
 
 
 # Resources - data AI can read
@@ -136,6 +147,46 @@ TOOLS = [
 ]
 
 
+# Database-specific SQL hints
+SQL_HINTS = {
+    "postgresql": """PostgreSQL syntax:
+  - EXTRACT(YEAR FROM date_col) for year
+  - EXTRACT(MONTH FROM date_col) for month
+  - TO_CHAR(date_col, 'YYYY-MM') for formatting
+  - Do NOT use strftime()""",
+    "mysql": """MySQL syntax:
+  - YEAR(date_col) for year
+  - MONTH(date_col) for month
+  - DATE_FORMAT(date_col, '%Y-%m') for formatting
+  - Do NOT use strftime()""",
+    "sqlite": """SQLite syntax:
+  - strftime('%Y', date_col) for year
+  - strftime('%m', date_col) for month
+  - strftime('%Y-%m', date_col) for formatting""",
+}
+
+
+def get_sql_hints(db_type: str) -> str:
+    """Get SQL hints for the database type."""
+    return SQL_HINTS.get(db_type, "")
+
+
+def format_rows(rows: list) -> list:
+    """Convert Python objects to JSON-serializable types."""
+    formatted = []
+    for row in rows:
+        formatted_row = {}
+        for key, value in row.items():
+            if isinstance(value, (date, datetime)):
+                formatted_row[key] = value.isoformat()
+            elif isinstance(value, Decimal):
+                formatted_row[key] = float(value)
+            else:
+                formatted_row[key] = value
+        formatted.append(formatted_row)
+    return formatted
+
+
 @server.list_resources()
 async def list_resources() -> list[Resource]:
     """List available resources."""
@@ -186,8 +237,11 @@ async def list_prompts() -> list[Prompt]:
 async def get_prompt(name: str, arguments: dict | None = None) -> GetPromptResult:
     """Get a prompt by name with arguments filled in."""
     if name == "data_analyst":
+        from app.db.database import db
+
         schema = arguments.get("schema", "") if arguments else ""
         question = arguments.get("question", "") if arguments else ""
+        sql_hints = get_sql_hints(db.db_type)
 
         content = f"""You are a data analyst. Convert the user's question into a database query for visualization.
 
@@ -198,6 +252,7 @@ RULES:
 - Use line chart for trends over time
 - Use pie chart for proportions
 - Reject questions unrelated to data analysis
+- {sql_hints}
 
 User question: {question}"""
 
@@ -214,109 +269,6 @@ async def list_tools() -> list[Tool]:
     return TOOLS
 
 
-MAX_ROWS = 1000
-QUERY_TIMEOUT = 30  # seconds
-
-# Valid tables and columns (populated from schema)
-VALID_TABLES = ["sales", "products", "features"]
-VALID_COLUMNS = {
-    "sales": ["id", "product_id", "quantity", "total_amount", "sale_date", "created_at"],
-    "products": ["id", "name", "category", "price", "created_at"],
-    "features": ["id", "product_id", "name", "description", "created_at"],
-}
-
-
-def build_sql_from_structure(args: dict) -> str:
-    """Build SQL from structured arguments. Validates and returns safe SQL."""
-    table = args["table"]
-    label_col = args["label_column"]
-    value_col = args["value_column"]
-    agg = args.get("aggregation", "NONE")
-    filters = args.get("filters", [])
-    order_by = args.get("order_by")
-    limit = args.get("limit", MAX_ROWS)
-
-    # Validate table
-    if table not in VALID_TABLES:
-        raise ValueError(f"Invalid table '{table}'. Valid: {VALID_TABLES}")
-
-    # Build SELECT clause
-    if agg != "NONE":
-        select = f"{label_col} AS label, {agg}({value_col}) AS value"
-    else:
-        select = f"{label_col} AS label, {value_col} AS value"
-
-    sql = f"SELECT {select} FROM {table}"
-
-    # Build WHERE clause
-    if filters:
-        conditions = []
-        for f in filters:
-            col = f["column"]
-            op = f["operator"]
-            val = f["value"]
-            # Escape single quotes in value
-            val_escaped = val.replace("'", "''")
-            if op == "IN":
-                conditions.append(f"{col} IN ({val_escaped})")
-            else:
-                conditions.append(f"{col} {op} '{val_escaped}'")
-        sql += f" WHERE {' AND '.join(conditions)}"
-
-    # Add GROUP BY if aggregating
-    if agg != "NONE":
-        sql += f" GROUP BY {label_col}"
-
-    # Add ORDER BY
-    if order_by:
-        order_map = {
-            "label_asc": "label ASC",
-            "label_desc": "label DESC",
-            "value_asc": "value ASC",
-            "value_desc": "value DESC"
-        }
-        sql += f" ORDER BY {order_map.get(order_by, 'value DESC')}"
-
-    # Add LIMIT
-    sql += f" LIMIT {min(limit, MAX_ROWS)}"
-
-    return sql
-
-
-def validate_raw_sql(sql: str) -> str:
-    """Validate raw SQL for advanced_query. Returns sanitized SQL or raises ValueError."""
-    sql = sql.strip().rstrip(";")  # Remove trailing semicolon
-    sql_upper = sql.upper()
-
-    # Must be SELECT
-    if not sql_upper.startswith("SELECT"):
-        raise ValueError("Only SELECT queries are allowed")
-
-    # Block dangerous keywords
-    dangerous = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC", "GRANT", "REVOKE"]
-    for keyword in dangerous:
-        if keyword in sql_upper:
-            raise ValueError(f"Dangerous keyword '{keyword}' not allowed")
-
-    # Block SQL injection patterns
-    injection_patterns = [
-        ";",           # Multiple statements (after stripping trailing)
-        "--",          # SQL comments
-        "/*",          # Block comments
-        "INTO OUTFILE", # File writes
-        "LOAD_FILE",   # File reads
-    ]
-    for pattern in injection_patterns:
-        if pattern in sql_upper:
-            raise ValueError(f"SQL pattern '{pattern}' not allowed")
-
-    # Add row limit if not present
-    if "LIMIT" not in sql_upper:
-        sql = f"{sql} LIMIT {MAX_ROWS}"
-
-    return sql
-
-
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """Execute query tools."""
@@ -329,12 +281,13 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     try:
         # Build SQL based on tool type
         if name == "simple_query":
-            sql = build_sql_from_structure(arguments)
+            sql, params = await build_sql_from_structure(arguments)
             chart_type = arguments.get("chart_type", "bar")
-            logger.info(f"simple_query built SQL: {sql}")
+            logger.info(f"simple_query SQL: {sql}, params: {params}")
 
         elif name == "advanced_query":
             sql = validate_raw_sql(arguments.get("sql", ""))
+            params = None  # advanced_query doesn't use params (raw SQL from AI)
             chart_type = arguments.get("chart_type", "bar")
             logger.info(f"advanced_query SQL: {sql}")
 
@@ -344,18 +297,24 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Execute query with timeout
         try:
             rows = await asyncio.wait_for(
-                db.execute_query(sql),
+                db.execute_query(sql, params),
                 timeout=QUERY_TIMEOUT
             )
         except asyncio.TimeoutError:
             raise ValueError(f"Query timed out after {QUERY_TIMEOUT} seconds")
 
-        result = {"chart_type": chart_type, "rows": rows}
+        result = {"chart_type": chart_type, "rows": format_rows(rows)}
         return [TextContent(type="text", text=json.dumps(result))]
 
     except Exception as e:
         logger.error(f"Tool error: {e}")
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+        # Include valid tables in error to help AI self-correct
+        try:
+            valid_tables = await get_valid_tables()
+            error_msg = f"{str(e)}. Valid tables: {valid_tables}"
+        except Exception:
+            error_msg = str(e)
+        return [TextContent(type="text", text=json.dumps({"error": error_msg}))]
 
 
 # Health check endpoint
