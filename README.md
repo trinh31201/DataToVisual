@@ -2,164 +2,221 @@
 
 A data-to-visualization system where users ask business questions in plain English and instantly see the answer as a chart.
 
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Setup](#setup)
+- [Usage](#usage)
+- [API Reference](#api-reference)
+- [MCP Tools](#mcp-tools)
+- [Database](#database)
+- [Design Decisions](#design-decisions)
+- [AI Reliability](#ai-reliability)
+- [Project Structure](#project-structure)
+- [Future Improvements](#future-improvements)
+
+---
+
+## Overview
+
+Users ask questions like "Show total sales by category" and get an instant chart visualization. The system uses:
+
+- **MCP (Model Context Protocol)** for AI-tool interaction
+- **Gemini AI** for natural language understanding
+- **Chart.js** for visualization
+
+---
+
 ## Architecture
 
-```
-┌──────────┐     ┌─────────┐     ┌────────────┐     ┌──────────┐
-│ Frontend │────▶│ Backend │────▶│ MCP Server │────▶│ Database │
-│ Chart.js │     │ FastAPI │ SSE │  (Tools)   │     │ SQL      │
-└──────────┘     └─────────┘     └────────────┘     └──────────┘
-                      │
-                      ▼
-                ┌───────────┐
-                │ Gemini AI │
-                └───────────┘
-```
+![Architecture](docs/architecture.png)
 
-### Why MCP (Model Context Protocol)?
+### Sequence Diagram
 
-**Decision:** Use MCP instead of direct LLM API calls.
+![Sequence Diagram Part 1](docs/sequence-1.png)
+![Sequence Diagram Part 2](docs/sequence-2.png)
 
-**Reasoning:**
-- **Standardized interface** - MCP provides a standard way for AI to interact with tools, resources, and prompts
-- **Separation of concerns** - AI logic (tool selection) is separate from execution (database queries)
-- **Extensibility** - Easy to add new tools without changing AI integration code
-- **Interoperability** - MCP server can be used by other AI clients (Claude Desktop, Cursor, etc.)
+### Why MCP?
 
-### Why HTTP/SSE Transport (not Stdio)?
+- Standardized AI-tool interface
+- Separation of concerns (AI logic vs execution)
+- Extensible and interoperable
 
-**Decision:** Use HTTP/SSE transport instead of stdio.
+### Why HTTP/SSE?
 
-**Reasoning:**
-- **Docker-friendly** - Each service runs in its own container
-- **Scalability** - MCP server can be scaled independently
-- **Debugging** - Easier to inspect HTTP traffic than stdio pipes
-- **Production-ready** - HTTP is standard for microservices
+- Docker-friendly (each service in own container)
+- Scalable and debuggable
+- Production-ready
+
+---
 
 ## Tech Stack
 
-| Component | Technology | Why |
-|-----------|------------|-----|
-| Backend | FastAPI | Async, fast, auto-docs |
-| MCP Server | Starlette + SSE | Lightweight, async |
+| Component | Technology | Purpose |
+|-----------|------------|---------|
+| Backend | FastAPI | Async API server |
+| MCP Server | Starlette + SSE | Tool execution |
 | Database | SQLAlchemy | Multi-DB support |
-| AI | Gemini API | Free tier, function calling |
-| Frontend | Chart.js | Simple, no build step |
-| Container | Docker Compose | Easy deployment |
+| AI | Gemini API | Natural language processing |
+| Frontend | Chart.js | Chart rendering |
+| Container | Docker Compose | Deployment |
 
-## Design Decisions
-
-### 1. Hybrid Query Tools (simple_query + advanced_query)
-
-**Problem:** AI-generated raw SQL can have syntax errors or security issues.
-
-**Solution:** Two-tool approach:
-
-| Tool | Use Case | Safety |
-|------|----------|--------|
-| `simple_query` | Single-table aggregations | SQL built from validated structure |
-| `advanced_query` | JOINs, complex queries | Raw SQL with sanitization |
-
-**Why hybrid?**
-- `simple_query` handles 80% of cases safely (no SQL injection possible)
-- `advanced_query` provides flexibility for complex queries
-- AI chooses the appropriate tool based on query complexity
-
-### 2. Multi-Database Support via SQLAlchemy
-
-**Problem:** Locked to PostgreSQL initially.
-
-**Solution:** Use SQLAlchemy's `text()` for raw queries instead of database-specific drivers.
-
-```python
-# Works with any database
-result = await conn.execute(text(sql))
-```
-
-**Trade-off:** Slight overhead, but gains database portability.
-
-### 3. SQL Safety Layers
-
-| Layer | Protection |
-|-------|------------|
-| Keyword blocking | DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE |
-| Pattern blocking | `;` (multi-statement), `--` (comments), `UNION` |
-| Row limit | Auto-adds `LIMIT 1000` |
-| Timeout | 30-second query timeout |
-| Table whitelist | Only allowed tables in `simple_query` |
-
-**Why not just trust the AI?**
-- AI can be manipulated via prompt injection
-- Defense in depth is essential for database access
-
-### 4. Schema Discovery via MCP Resource
-
-**Decision:** Fetch schema dynamically, not hardcoded.
-
-```python
-@server.read_resource()
-async def read_resource(uri):
-    if uri == "schema://database":
-        # Query information_schema dynamically
-```
-
-**Why?**
-- Schema changes don't require code updates
-- Works with any database structure
-- AI always has current schema
+---
 
 ## Setup
 
 ### Prerequisites
 
 - Docker & Docker Compose
-- Gemini API key ([Get one free](https://aistudio.google.com/))
+- Gemini API key ([Get free](https://aistudio.google.com/))
 
 ### Quick Start
 
 ```bash
-# Clone
+# 1. Clone
 git clone <repo-url>
 cd DataToVisual
 
-# Configure
+# 2. Configure
 cp .env.example .env
-# Add your GEMINI_API_KEY to .env
+# Edit .env and add GEMINI_API_KEY
 
-# Start
-docker-compose up -d
+# 3. Start all services
+make up
 
-# Seed database
-docker exec datatovisual_backend python -m app.db.seed
+# 4. Seed database
+make seed
 
-# Open frontend
+# 5. Open frontend
+open http://localhost:5500
+```
+
+### Run Each Service
+
+#### Database (PostgreSQL)
+
+```bash
+# Start database only
+docker compose up -d postgres
+
+# Check database is ready
+docker compose exec postgres pg_isready
+
+# Connect to database
+docker compose exec postgres psql -U postgres -d datatovisual
+```
+
+#### Backend (FastAPI)
+
+```bash
+# Start backend (requires database)
+docker compose up -d postgres backend
+
+# View backend logs
+make logs s=backend
+
+# Run tests
+make test
+```
+
+#### MCP Server
+
+```bash
+# Start MCP server (requires database)
+docker compose up -d postgres mcp-server
+
+# View MCP server logs
+make logs s=mcp-server
+```
+
+#### Frontend (Chart.js)
+
+```bash
+# Start frontend
+docker compose up -d frontend
+
+# Or run locally without Docker
 cd frontend && python -m http.server 5500
 ```
 
-**URLs:**
-- Frontend: http://localhost:5500
-- API: http://localhost:8000
-- API Docs: http://localhost:8000/docs
-- MCP Server: http://localhost:3001
+### URLs
 
-## Example Queries
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:5500 |
+| API | http://localhost:8000 |
+| API Docs | http://localhost:8000/docs |
+| MCP Server | http://localhost:3001 |
 
-| Question | Tool Used | Chart |
-|----------|-----------|-------|
-| "Sales by category" | advanced_query (JOIN) | Bar |
-| "Top 5 products by quantity" | advanced_query (JOIN) | Bar |
-| "Monthly sales trend" | advanced_query (EXTRACT) | Line |
-| "Count products per category" | simple_query | Pie |
+### MCP Inspector
 
-## API
+Debug and test MCP server tools, resources, and prompts:
+
+```bash
+# Install MCP Inspector
+npx @anthropic/mcp-inspector
+
+# Connect to MCP server
+# URL: http://localhost:3001/sse
+```
+
+Features:
+- List and test tools (`simple_query`, `advanced_query`)
+- Read resources (`schema://database`)
+- Get prompts (`data_analyst`)
+- View request/response payloads
+
+### Make Commands
+
+| Command | Description |
+|---------|-------------|
+| `make up` | Start all services |
+| `make down` | Stop all services |
+| `make rebuild` | Rebuild and restart |
+| `make test` | Run all tests |
+| `make test-unit` | Run unit tests only |
+| `make test-int` | Run integration tests only |
+| `make seed` | Seed the database |
+| `make logs s=backend` | Show logs for a service |
+| `make status` | Show service status |
+| `make clean` | Remove containers and volumes |
+
+---
+
+## Usage
+
+### Example Questions
+
+| Question | Chart Type |
+|----------|------------|
+| Show total sales by category | Bar |
+| Top 5 products by quantity | Bar |
+| Monthly sales trend for 2024 | Line |
+| Count products per category | Pie |
+| Compare total sales in 2026 vs 2022 | Bar |
+| Average order value by category | Bar |
+| Sales distribution as pie chart | Pie |
+| Products with price above 500 | Bar |
+
+---
+
+## API Reference
 
 ### POST /api/v1/query
 
+**Request:**
 ```json
-// Request
-{ "question": "Show total sales by category" }
+{
+  "question": "Show total sales by category"
+}
+```
 
-// Response
+**Response:**
+```json
 {
   "question": "Show total sales by category",
   "chart_type": "bar",
@@ -170,52 +227,13 @@ cd frontend && python -m http.server 5500
 }
 ```
 
-## Switching Databases
+---
 
-| Database | DATABASE_TYPE | DATABASE_URL | Driver |
-|----------|---------------|--------------|--------|
-| PostgreSQL | `postgresql` | `postgresql://user:pass@host/db` | `asyncpg` |
-| MySQL | `mysql` | `mysql://user:pass@host/db` | `aiomysql` |
-| SQLite | `sqlite` | `sqlite:///path/to/file.db` | `aiosqlite` |
-
-```bash
-# .env
-DATABASE_TYPE=mysql
-DATABASE_URL=mysql://user:pass@localhost/mydb
-
-# Install driver
-pip install aiomysql
-```
-
-## Project Structure
-
-```
-DataToVisual/
-├── docker-compose.yml          # 3 services: postgres, mcp-server, backend
-├── backend/
-│   ├── app/
-│   │   ├── main.py             # FastAPI app
-│   │   ├── config.py           # Environment config
-│   │   ├── routers/query.py    # POST /api/v1/query
-│   │   ├── mcp/
-│   │   │   ├── server.py       # MCP Server (tools, resources, prompts)
-│   │   │   └── clients/
-│   │   │       ├── base.py     # MCP client (SSE transport)
-│   │   │       └── gemini.py   # Gemini function calling
-│   │   └── db/
-│   │       └── database.py     # SQLAlchemy multi-DB
-│   └── requirements.txt
-└── frontend/
-    ├── index.html
-    ├── style.css
-    └── app.js
-```
-
-## MCP Tools Reference
+## MCP Tools
 
 ### simple_query
 
-Structured query builder for single-table operations.
+Structured query for single-table operations. SQL is built from validated parameters.
 
 ```json
 {
@@ -232,7 +250,7 @@ Structured query builder for single-table operations.
 
 ### advanced_query
 
-Raw SQL for complex queries (JOINs, subqueries).
+Raw SQL for complex queries (JOINs, subqueries). Includes SQL sanitization.
 
 ```json
 {
@@ -241,7 +259,11 @@ Raw SQL for complex queries (JOINs, subqueries).
 }
 ```
 
-## Database Schema
+---
+
+## Database
+
+### Schema
 
 ```
 products (id, name, category, price, created_at)
@@ -251,12 +273,121 @@ products (id, name, category, price, created_at)
     └── sales (id, product_id, quantity, total_amount, sale_date)
 ```
 
-Sales data: 2022-2026 with realistic trends.
+### Multi-Database Support
+
+| Database | DATABASE_TYPE | DATABASE_URL |
+|----------|---------------|--------------|
+| PostgreSQL | `postgresql` | `postgresql://user:pass@host/db` |
+| MySQL | `mysql` | `mysql://user:pass@host/db` |
+| SQLite | `sqlite` | `sqlite:///path/to/file.db` |
+
+---
+
+## Design Decisions
+
+### 1. Two-Tool Design (simple_query + advanced_query)
+
+| Tool | Use Case | Safety |
+|------|----------|--------|
+| `simple_query` | Single-table aggregations | SQL built from validated structure |
+| `advanced_query` | JOINs, complex queries | Raw SQL with sanitization |
+
+**Why only 2 tools?**
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **1 tool (raw SQL only)** | Maximum flexibility | High security risk, AI errors in SQL syntax |
+| **2 tools (our choice)** | Balance of safety + flexibility | AI must choose correctly |
+| **Many tools (per operation)** | Very safe, predictable | Limited queries, complex tool selection |
+
+**Trade-offs of 2-tool approach:**
+
+| Trade-off | Our Choice | Alternative |
+|-----------|------------|-------------|
+| Safety vs Flexibility | 80% safe (simple), 20% flexible (advanced) | All raw SQL = 100% flexible but risky |
+| AI Complexity | AI chooses between 2 tools | Many tools = harder for AI to choose |
+| Query Coverage | Covers most business questions | Single tool = limited or unsafe |
+| Maintenance | 2 tools to maintain | Many tools = more code to maintain |
+
+**When AI chooses which tool:**
+
+| Question Type | Tool | Why |
+|---------------|------|-----|
+| "Count products per category" | `simple_query` | Single table, basic aggregation |
+| "Total sales by category" | `advanced_query` | Needs JOIN (sales + products) |
+| "Top 5 products by revenue" | `advanced_query` | Needs JOIN + ORDER BY + LIMIT |
+| "Average price per category" | `simple_query` | Single table (products) |
+
+### 2. SQL Safety Layers
+
+| Layer | Protection |
+|-------|------------|
+| Keyword blocking | DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE |
+| Pattern blocking | `;` (multi-statement), `--` (comments), `UNION` |
+| Row limit | Auto-adds `LIMIT 1000` |
+| Timeout | 30-second query timeout |
+| Table whitelist | Only allowed tables in `simple_query` |
+
+### 3. Dynamic Schema Discovery
+
+Schema is fetched from database at runtime via MCP Resource, not hardcoded.
+
+---
+
+## AI Reliability
+
+### Validation
+
+AI responses are validated against MCP tool schemas dynamically:
+
+| Check | Description |
+|-------|-------------|
+| Tool name | Must exist in MCP server's tool list |
+| Required fields | All required fields from inputSchema |
+| Enum values | Must match allowed values from schema |
+
+### Retry with Fallback
+
+```
+simple_query fails → AI generates raw SQL → Execute advanced_query
+```
+
+Implementation: `backend/app/mcp/clients/base.py`
+
+---
+
+## Project Structure
+
+```
+DataToVisual/
+├── docker-compose.yml
+├── backend/
+│   ├── app/
+│   │   ├── main.py              # FastAPI app
+│   │   ├── config.py            # Environment config
+│   │   ├── routers/query.py     # API endpoint
+│   │   ├── mcp/
+│   │   │   ├── server.py        # MCP Server
+│   │   │   ├── sql_builder.py   # SQL building & validation
+│   │   │   └── clients/
+│   │   │       ├── base.py      # MCP client + reliability
+│   │   │       └── gemini.py    # Gemini integration
+│   │   └── db/
+│   │       └── database.py      # SQLAlchemy
+│   └── tests/
+│       ├── unit/
+│       └── integration/
+└── frontend/
+    ├── index.html
+    ├── style.css
+    └── app.js
+```
+
+---
 
 ## Future Improvements
 
 - [ ] Add more AI providers (Claude, OpenAI)
-- [ ] Frontend in Docker
 - [ ] Caching for repeated queries
 - [ ] User authentication
 - [ ] Query history

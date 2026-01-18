@@ -62,28 +62,37 @@ h1 {
 
 .examples {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
     align-items: center;
     margin-bottom: 30px;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
 }
 
 .examples span {
     color: #666;
+    font-weight: 500;
+    width: 100%;
+    margin-bottom: 5px;
 }
 
 .examples button {
-    padding: 8px 12px;
-    font-size: 13px;
-    background: #e9ecef;
+    padding: 6px 10px;
+    font-size: 12px;
+    background: #fff;
     color: #333;
-    border: none;
-    border-radius: 5px;
+    border: 1px solid #ddd;
+    border-radius: 15px;
     cursor: pointer;
+    transition: all 0.2s;
 }
 
 .examples button:hover {
-    background: #dee2e6;
+    background: #007bff;
+    color: white;
+    border-color: #007bff;
 }
 
 .loading {
